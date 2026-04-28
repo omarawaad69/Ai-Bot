@@ -265,7 +265,6 @@ async def cmd_start(message: types.Message):
         parse_mode="Markdown"
     )
 
-
 @router.message(Command("developer"))
 async def cmd_developer(message: types.Message):
     update_user_activity(message.from_user)
@@ -306,7 +305,6 @@ async def handle_message(message: types.Message):
     user_text = message.text
     text_lower = user_text.lower()
 
-    # 1. التحقق من نية التحويل إلى Word/PDF
     intent, content = detect_conversion_intent(user_text)
     
     if intent == "WORD_NEED_TEXT":
@@ -338,7 +336,6 @@ async def handle_message(message: types.Message):
             logger.error(f"PDF error: {e}")
             return await message.reply("❌ حدث خطأ في إنشاء ملف PDF.")
 
-    # 2. التحقق من نية طلب صورة
     image_keywords = ["اعملي صورة", "اعمل صورة", "ارسم", "صمملي", "تخيل", "صورلي", "توليد صورة", "انشاء صورة", "صمم صورة", "generate image", "create image"]
     is_image_request = any(keyword in text_lower for keyword in image_keywords)
 
@@ -362,7 +359,6 @@ async def handle_message(message: types.Message):
         await message.reply(final_response, parse_mode="Markdown")
         return
 
-    # 3. سؤال عادي
     await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
     resp = await gemini_client.generate(user_text)
     for i in range(0, len(resp), 4000):
