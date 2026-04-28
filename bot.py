@@ -259,20 +259,21 @@ async def cmd_start(message: types.Message):
         "- تصميم برومبت احترافي للصور\n\n"
         "💬 تحدث معي طبيعياً وسأفهمك!\n\n"
         "━━━━━━━━━━━━━━━━━━\n"
-        f"👨‍💻 المبرمج: {DEVELOPER_NAME}\n"
-        f"📧 للتواصل:\n{DEVELOPER_USERNAME}\n"
-        "━━━━━━━━━━━━━━━━━━"
+        f"👨‍💻 *المبرمج:* {DEVELOPER_NAME}\n"
+        f"📧 *للتواصل:* [اضغط هنا للمراسلة](tg://resolve?domain=omarawaad68)\n"
+        "━━━━━━━━━━━━━━━━━━",
+        parse_mode="Markdown"
     )
-
 
 @router.message(Command("developer"))
 async def cmd_developer(message: types.Message):
     update_user_activity(message.from_user)
     await message.answer(
-        "👨‍💻 معلومات المبرمج\n\n"
-        f"📛 الاسم: {DEVELOPER_NAME}\n"
-        f"📧 للتواصل:\n{DEVELOPER_USERNAME}\n\n"
-        "💡 أرسل رسالة إلى الحساب أعلاه لأي استفسار أو اقتراح."
+        "👨‍💻 *معلومات المبرمج*\n\n"
+        f"📛 *الاسم:* {DEVELOPER_NAME}\n"
+        f"📧 *للتواصل:* [اضغط هنا للمراسلة](tg://resolve?domain=omarawaad68)\n\n"
+        "💡 *للتواصل:* أرسل رسالة إلى الحساب أعلاه لأي استفسار أو اقتراح أو طلب تطوير بوت خاص.",
+        parse_mode="Markdown"
     )
 
 @router.message(Command("admin"))
