@@ -260,7 +260,7 @@ async def cmd_start(message: types.Message):
         "💬 تحدث معي طبيعياً وسأفهمك!\n\n"
         "━━━━━━━━━━━━━━━━━━\n"
         f"👨‍💻 *المبرمج:* {DEVELOPER_NAME}\n"
-        f"📧 *للتواصل:* [{DEVELOPER_USERNAME}]({DEVELOPER_LINK})\n"
+        f"📧 *للتواصل:* @{DEVELOPER_USERNAME[1:]}\n"
         "━━━━━━━━━━━━━━━━━━",
         parse_mode="Markdown"
     )
@@ -271,7 +271,7 @@ async def cmd_developer(message: types.Message):
     await message.answer(
         "👨‍💻 *معلومات المبرمج*\n\n"
         f"📛 *الاسم:* {DEVELOPER_NAME}\n"
-        f"📧 *للتواصل:* [{DEVELOPER_USERNAME}]({DEVELOPER_LINK})\n\n"
+        f"📧 *للتواصل:* @{DEVELOPER_USERNAME[1:]}\n\n"
         "💡 *للتواصل:* أرسل رسالة إلى الحساب أعلاه لأي استفسار أو اقتراح أو طلب تطوير بوت خاص.",
         parse_mode="Markdown"
     )
