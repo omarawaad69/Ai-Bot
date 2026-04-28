@@ -1,6 +1,5 @@
 FROM python:3.12-slim
 
-# تحديث وتثبيت ffmpeg + libreoffice
 RUN apt-get update -y && \
     apt-get upgrade -y && \
     apt-get install -y --no-install-recommends \
