@@ -23,6 +23,13 @@ logger = logging.getLogger(__name__)
 
 router = Router()
 
+# ==================== معرف الأدمن ====================
+ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "7361263893"))
+
+# ==================== معلومات المبرمج ====================
+DEVELOPER_NAME = "Omar Abd El Gawaad"
+DEVELOPER_USERNAME = "@omarawaad68"
+
 # ==================== الشخصية ====================
 SYSTEM_PROMPT = """
 أنت "مستشار الذكاء الاصطناعي الخارق". أنت تجمع بين خبير موسوعي ومبرمج عبقري. هدفك تقديم إجابات دقيقة واحترافية في كل المجالات، مع قدرة استثنائية على البرمجة.
@@ -249,12 +256,33 @@ async def cmd_start(message: types.Message):
         "- تحليل الصور والمستندات\n"
         "- الاستماع إلى الرسائل الصوتية\n"
         "- تصميم برومبت احترافي للصور\n\n"
-        "💬 تحدث معي طبيعياً وسأفهمك!"
+        "💬 تحدث معي طبيعياً وسأفهمك!\n\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"👨‍💻 *المبرمج:* {DEVELOPER_NAME}\n"
+        f"📧 *للتواصل:* {DEVELOPER_USERNAME}\n"
+        "━━━━━━━━━━━━━━━━━━",
+        parse_mode="Markdown"
+    )
+
+@router.message(Command("developer"))
+async def cmd_developer(message: types.Message):
+    update_user_activity(message.from_user)
+    await message.answer(
+        "👨‍💻 *معلومات المبرمج*\n\n"
+        f"📛 *الاسم:* {DEVELOPER_NAME}\n"
+        f"📧 *يوزر تيليجرام:* {DEVELOPER_USERNAME}\n\n"
+        "💡 *للتواصل:* أرسل رسالة إلى الحساب أعلاه لأي استفسار أو اقتراح أو طلب تطوير بوت خاص.",
+        parse_mode="Markdown"
     )
 
 @router.message(Command("admin"))
 async def cmd_admin(message: types.Message):
     update_user_activity(message.from_user)
+    
+    if message.from_user.id != ADMIN_USER_ID:
+        await message.answer("⛔ عذراً، هذا الأمر متاح فقط لمالك البوت.")
+        return
+    
     u, t, y = get_stats()
     await message.answer(
         f"📊 *لوحة الإحصائيات*\n\n"
