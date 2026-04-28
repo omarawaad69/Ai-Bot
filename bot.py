@@ -246,6 +246,7 @@ def detect_conversion_intent(text: str):
 
 # ==================== الأوامر العامة ====================
 @router.message(Command("start"))
+@router.message(Command("start"))
 async def cmd_start(message: types.Message):
     update_user_activity(message.from_user)
     await message.answer(
@@ -260,7 +261,7 @@ async def cmd_start(message: types.Message):
         "💬 تحدث معي طبيعياً وسأفهمك!\n\n"
         "━━━━━━━━━━━━━━━━━━\n"
         f"👨‍💻 *المبرمج:* {DEVELOPER_NAME}\n"
-        f"📧 *للتواصل:* @{DEVELOPER_USERNAME[1:]}\n"
+        f"📧 *للتواصل:* **{DEVELOPER_USERNAME}**\n"
         "━━━━━━━━━━━━━━━━━━",
         parse_mode="Markdown"
     )
@@ -271,7 +272,7 @@ async def cmd_developer(message: types.Message):
     await message.answer(
         "👨‍💻 *معلومات المبرمج*\n\n"
         f"📛 *الاسم:* {DEVELOPER_NAME}\n"
-        f"📧 *للتواصل:* @{DEVELOPER_USERNAME[1:]}\n\n"
+        f"📧 *للتواصل:* **{DEVELOPER_USERNAME}**\n\n"
         "💡 *للتواصل:* أرسل رسالة إلى الحساب أعلاه لأي استفسار أو اقتراح أو طلب تطوير بوت خاص.",
         parse_mode="Markdown"
     )
