@@ -28,7 +28,7 @@ ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "7361263893"))
 
 # ==================== معلومات المبرمج ====================
 DEVELOPER_NAME = "Omar Abd El Gawaad"
-DEVELOPER_USERNAME = "@omarawaad68"
+DEVELOPER_USERNAME = "omarawaad68@"
 
 # ==================== الشخصية ====================
 SYSTEM_PROMPT = """
