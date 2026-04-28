@@ -28,7 +28,8 @@ ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "7361263893"))
 
 # ==================== معلومات المبرمج ====================
 DEVELOPER_NAME = "Omar Abd El Gawaad"
-DEVELOPER_USERNAME = "omarawaad68@"
+DEVELOPER_USERNAME = "@omarawaad68"
+DEVELOPER_LINK = "https://t.me/omarawaad68"
 
 # ==================== الشخصية ====================
 SYSTEM_PROMPT = """
@@ -259,10 +260,11 @@ async def cmd_start(message: types.Message):
         "💬 تحدث معي طبيعياً وسأفهمك!\n\n"
         "━━━━━━━━━━━━━━━━━━\n"
         f"👨‍💻 *المبرمج:* {DEVELOPER_NAME}\n"
-        f"📧 *للتواصل:* {DEVELOPER_USERNAME}\n"
+        f"📧 *للتواصل:* [اضغط هنا]({DEVELOPER_LINK})\n"
         "━━━━━━━━━━━━━━━━━━",
         parse_mode="Markdown"
     )
+
 
 @router.message(Command("developer"))
 async def cmd_developer(message: types.Message):
@@ -270,7 +272,7 @@ async def cmd_developer(message: types.Message):
     await message.answer(
         "👨‍💻 *معلومات المبرمج*\n\n"
         f"📛 *الاسم:* {DEVELOPER_NAME}\n"
-        f"📧 *يوزر تيليجرام:* {DEVELOPER_USERNAME}\n\n"
+        f"📧 *للتواصل:* [اضغط هنا]({DEVELOPER_LINK})\n\n"
         "💡 *للتواصل:* أرسل رسالة إلى الحساب أعلاه لأي استفسار أو اقتراح أو طلب تطوير بوت خاص.",
         parse_mode="Markdown"
     )
