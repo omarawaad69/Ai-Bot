@@ -12,9 +12,6 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# تثبيت المكتبات الصوتية بشكل صريح
-RUN pip install SpeechRecognition pydub
-
 COPY . .
 
 CMD ["python", "bot.py"]
