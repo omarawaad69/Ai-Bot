@@ -259,10 +259,9 @@ async def cmd_start(message: types.Message):
         "- تصميم برومبت احترافي للصور\n\n"
         "💬 تحدث معي طبيعياً وسأفهمك!\n\n"
         "━━━━━━━━━━━━━━━━━━\n"
-        f"👨‍💻 *المبرمج:* {DEVELOPER_NAME}\n"
-        f"📧 *للتواصل:* [Contact Developer]({DEVELOPER_LINK})\n"
-        "━━━━━━━━━━━━━━━━━━",
-        parse_mode="Markdown"
+        f"👨‍💻 المبرمج: {DEVELOPER_NAME}\n"
+        f"📧 للتواصل:\n{DEVELOPER_USERNAME}\n"
+        "━━━━━━━━━━━━━━━━━━"
     )
 
 
@@ -270,11 +269,10 @@ async def cmd_start(message: types.Message):
 async def cmd_developer(message: types.Message):
     update_user_activity(message.from_user)
     await message.answer(
-        "👨‍💻 *معلومات المبرمج*\n\n"
-        f"📛 *الاسم:* {DEVELOPER_NAME}\n"
-        f"📧 *للتواصل:* [Contact Developer]({DEVELOPER_LINK})\n\n"
-        "💡 *للتواصل:* أرسل رسالة إلى الحساب أعلاه لأي استفسار أو اقتراح أو طلب تطوير بوت خاص.",
-        parse_mode="Markdown"
+        "👨‍💻 معلومات المبرمج\n\n"
+        f"📛 الاسم: {DEVELOPER_NAME}\n"
+        f"📧 للتواصل:\n{DEVELOPER_USERNAME}\n\n"
+        "💡 أرسل رسالة إلى الحساب أعلاه لأي استفسار أو اقتراح."
     )
 
 @router.message(Command("admin"))
