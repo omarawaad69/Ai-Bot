@@ -140,76 +140,102 @@ def text_to_docx(text: str, filepath: str):
     doc.save(filepath)
 
 def text_to_pdf(text: str, filepath: str):
-    text_to_docx(text, filepath.replace('.pdf', '.docx'))
+    docx_path = filepath.replace('.pdf', '.docx')
+    text_to_docx(text, docx_path)
     subprocess.run(['libreoffice','--headless','--convert-to','pdf',
-                    '--outdir', os.path.dirname(filepath),
-                    filepath.replace('.pdf', '.docx')], check=True, timeout=30)
-    os.remove(filepath.replace('.pdf', '.docx'))
+                    '--outdir', os.path.dirname(filepath), docx_path],
+                   check=True, timeout=30)
+    os.remove(docx_path)
 
-def convert_ogg_to_wav(input_path: str, output_path: str):
-    """تحويل ملف OGG إلى WAV باستخدام pydub"""
-    try:
-        from pydub import AudioSegment
-        audio = AudioSegment.from_file(input_path, format="ogg")
-        audio = audio.set_frame_rate(16000).set_channels(1)
-        audio.export(output_path, format="wav")
-        return True
-    except Exception as e:
-        logger.error(f"Error converting audio: {e}")
-        return False
+def detect_conversion_intent(text: str) -> tuple[str, str]:
+    """
+    يكتشف إذا كان المستخدم يريد تحويل النص إلى ملف.
+    يرجع: (الصيغة المطلوبة, النص المراد تحويله) أو (None, None)
+    """
+    text_lower = text.lower()
+    
+    # الكلمات المفتاحية للتحويل إلى Word
+    word_keywords = [
+        "ملف وورد", "ملف word", "وورد", "word", "docx",
+        "حولو لword", "حولو لوورد", "خليه وورد", "خليه word",
+        "ابعتلي وورد", "انزله وورد", "حمله وورد"
+    ]
+    
+    # الكلمات المفتاحية للتحويل إلى PDF
+    pdf_keywords = [
+        "ملف pdf", "بي دي اف", "pdf",
+        "حولو لpdf", "حولو لبي دي اف",
+        "خليه pdf", "خليه بي دي اف",
+        "ابعتلي pdf", "انزله pdf", "حمله pdf"
+    ]
+    
+    # التحقق من نية التحويل إلى Word
+    for keyword in word_keywords:
+        if keyword in text_lower:
+            # استخراج النص المطلوب تحويله (ما بعد الكلمة المفتاحية غالباً)
+            idx = text_lower.find(keyword)
+            content = text[idx + len(keyword):].strip()
+            if not content:
+                # إذا لم يحدد نصاً، نطلب منه التوضيح
+                return "WORD_NEED_TEXT", ""
+            return "docx", content
+    
+    # التحقق من نية التحويل إلى PDF
+    for keyword in pdf_keywords:
+        if keyword in text_lower:
+            idx = text_lower.find(keyword)
+            content = text[idx + len(keyword):].strip()
+            if not content:
+                return "PDF_NEED_TEXT", ""
+            return "pdf", content
+    
+    return None, None
 
-def transcribe_audio(file_path: str) -> str:
-    """تحويل الصوت إلى نص باستخدام Google Speech Recognition"""
-    try:
-        import speech_recognition as sr
-        recognizer = sr.Recognizer()
-        with sr.AudioFile(file_path) as source:
-            audio = recognizer.record(source)
-        # تجربة العربية أولاً، ثم الإنجليزية
+# ==================== معالج النصوص (مع دعم التحويل التلقائي) ====================
+@router.message(F.text)
+async def handle_message(message: types.Message):
+    update_user_activity(message.from_user)
+    
+    # 1. التحقق من نية التحويل
+    intent, content = detect_conversion_intent(message.text)
+    
+    if intent == "WORD_NEED_TEXT":
+        return await message.reply("📝 ما هو النص الذي تريد تحويله إلى ملف Word؟")
+    
+    if intent == "PDF_NEED_TEXT":
+        return await message.reply("📕 ما هو النص الذي تريد تحويله إلى ملف PDF؟")
+    
+    if intent == "docx" and content:
+        await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
         try:
-            return recognizer.recognize_google(audio, language="ar-AR")
-        except:
-            return recognizer.recognize_google(audio, language="en-US")
-    except sr.UnknownValueError:
-        return None
-    except sr.RequestError:
-        return None
-    except Exception as e:
-        logger.error(f"Transcription error: {e}")
-        return None
+            path = f"/tmp/{message.from_user.id}_doc.docx"
+            text_to_docx(content, path)
+            await message.reply_document(FSInputFile(path), caption="📄 ملف Word جاهز!")
+            os.remove(path)
+            return
+        except Exception as e:
+            logger.error(f"toword error: {e}")
+            return await message.reply("❌ حدث خطأ أثناء إنشاء ملف Word.")
+    
+    if intent == "pdf" and content:
+        await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+        try:
+            path = f"/tmp/{message.from_user.id}_doc.pdf"
+            text_to_pdf(content, path)
+            await message.reply_document(FSInputFile(path), caption="📕 ملف PDF جاهز!")
+            os.remove(path)
+            return
+        except Exception as e:
+            logger.error(f"topdf error: {e}")
+            return await message.reply("❌ حدث خطأ أثناء إنشاء ملف PDF.")
+    
+    # 2. إذا لم تكن نية تحويل، تعامل كسؤال عادي
+    await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+    resp = await gemini_client.generate(message.text)
+    for i in range(0, len(resp), 4000):
+        await message.answer(resp[i:i+4000])
 
-# ==================== أوامر التحويل إلى ملفات ====================
-@router.message(Command("toword"))
-async def cmd_toword(message: types.Message, bot: Bot):
-    update_user_activity(message.from_user)
-    text = message.text.replace('/toword', '').strip()
-    if not text:
-        return await message.reply("📝 مثال: `/toword هذا نص التقرير`", parse_mode="Markdown")
-    try:
-        path = f"/tmp/{message.from_user.id}_doc.docx"
-        text_to_docx(text, path)
-        await message.reply_document(FSInputFile(path), caption="📄 ملف Word جاهز!")
-        os.remove(path)
-    except Exception as e:
-        logger.error(f"toword error: {e}")
-        await message.reply("❌ حدث خطأ.")
-
-@router.message(Command("topdf"))
-async def cmd_topdf(message: types.Message, bot: Bot):
-    update_user_activity(message.from_user)
-    text = message.text.replace('/topdf', '').strip()
-    if not text:
-        return await message.reply("📝 مثال: `/topdf هذا نص التقرير`", parse_mode="Markdown")
-    try:
-        path = f"/tmp/{message.from_user.id}_doc.pdf"
-        text_to_pdf(text, path)
-        await message.reply_document(FSInputFile(path), caption="📕 ملف PDF جاهز!")
-        os.remove(path)
-    except Exception as e:
-        logger.error(f"topdf error: {e}")
-        await message.reply("❌ حدث خطأ. تأكد من تثبيت LibreOffice.")
-
-# ==================== الأوامر العامة ====================
+# ==================== الأوامر العامة (للتوافق) ====================
 @router.message(Command("start"))
 async def cmd_start(message: types.Message):
     update_user_activity(message.from_user)
@@ -218,13 +244,10 @@ async def cmd_start(message: types.Message):
         "✨ ماذا يمكنني أن أفعل لك؟\n"
         "- الإجابة عن أي سؤال\n"
         "- كتابة وشرح الأكواد البرمجية\n"
-        "- تحليل الصور والمستندات\n"
         "- تحويل النصوص إلى ملفات Word أو PDF\n"
+        "- تحليل الصور والمستندات\n"
         "- الاستماع إلى الرسائل الصوتية\n\n"
-        "📝 /toword نص → إنشاء ملف Word\n"
-        "📕 /topdf نص → إنشاء ملف PDF\n"
-        "📊 /admin → إحصائيات البوت\n"
-        "🔄 /reset → مسح السياق"
+        "💬 فقط أخبرني: 'حول هذا النص إلى ملف وورد'"
     )
 
 @router.message(Command("admin"))
@@ -346,17 +369,15 @@ async def handle_document(message: types.Message, bot: Bot):
         logger.error(f"Doc error: {e}")
         await message.reply("عذراً، حدث خطأ.")
 
-# ==================== معالج الصوت (إصلاح نهائي) ====================
+# ==================== معالج الصوت ====================
 @router.message(F.voice)
 async def handle_voice(message: types.Message, bot: Bot):
     update_user_activity(message.from_user)
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     
     ogg_path = f"/tmp/{message.from_user.id}_voice.ogg"
-    wav_path = f"/tmp/{message.from_user.id}_voice.wav"
     
     try:
-        # 1. تنزيل الملف الصوتي
         voice = message.voice
         file_info = await bot.get_file(voice.file_id)
         bio = BytesIO()
@@ -367,44 +388,45 @@ async def handle_voice(message: types.Message, bot: Bot):
             f.write(bio.read())
         bio.close()
         
-        # 2. تحويل OGG إلى WAV
-        if not convert_ogg_to_wav(ogg_path, wav_path):
-            await message.reply("🎤 عذراً، فشل تحويل الصوت. حاول مرة أخرى.")
-            return
+        import speech_recognition as sr
+        recognizer = sr.Recognizer()
         
-        # 3. تحويل الصوت إلى نص
-        text = transcribe_audio(wav_path)
+        try:
+            with sr.AudioFile(ogg_path) as source:
+                audio = recognizer.record(source)
+            
+            text = None
+            for lang in ["ar-AR", "en-US", ""]:
+                try:
+                    text = recognizer.recognize_google(audio, language=lang) if lang else recognizer.recognize_google(audio)
+                    if text: break
+                except:
+                    continue
+                    
+        except sr.UnknownValueError:
+            text = None
+        except sr.RequestError as e:
+            logger.error(f"Speech API error: {e}")
+            await message.reply("⚠️ خدمة التعرف على الصوت غير متاحة حالياً.")
+            return
         
         if not text:
-            await message.reply("🎤 لم أتمكن من فهم الصوت. تحدث بوضووح وحاول مرة أخرى.")
+            await message.reply("🎤 لم أتمكن من فهم الصوت. تحدث بوضوح.")
             return
         
-        # 4. عرض النص المستخرج
         await message.reply(f"🎤 *لقد فهمت:* _{text}_", parse_mode="Markdown")
-        
-        # 5. إرسال النص إلى Gemini للرد
         resp = await gemini_client.generate(text)
         for i in range(0, len(resp), 4000):
             await message.answer(resp[i:i+4000])
             
+    except ImportError:
+        await message.reply("⚠️ مكتبة الصوت غير مثبتة.")
     except Exception as e:
         logger.error(f"Voice error: {e}")
-        await message.reply("🎤 عذراً، حدث خطأ أثناء معالجة الصوت.")
+        await message.reply("🎤 عذراً، حدث خطأ.")
     finally:
-        # تنظيف الملفات المؤقتة
         if os.path.exists(ogg_path):
             os.remove(ogg_path)
-        if os.path.exists(wav_path):
-            os.remove(wav_path)
-
-# ==================== معالج النصوص ====================
-@router.message(F.text)
-async def handle_message(message: types.Message):
-    update_user_activity(message.from_user)
-    await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
-    resp = await gemini_client.generate(message.text)
-    for i in range(0, len(resp), 4000):
-        await message.answer(resp[i:i+4000])
 
 # ==================== الرئيسية ====================
 async def main():
