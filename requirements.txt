@@ -2,3 +2,7 @@ aiogram
 google-genai
 python-dotenv
 Pillow
+PyPDF2
+python-docx
+SpeechRecognition
+pydub
