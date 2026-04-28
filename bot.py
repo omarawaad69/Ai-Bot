@@ -29,7 +29,7 @@ ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "7361263893"))
 # ==================== معلومات المبرمج ====================
 DEVELOPER_NAME = "Omar Abd El Gawaad"
 DEVELOPER_USERNAME = "@omarawaad68"
-DEVELOPER_LINK = "https://t.me/omarawaad68"
+DEVELOPER_LINK = "tg://resolve?domain=omarawaad68"
 
 # ==================== الشخصية ====================
 SYSTEM_PROMPT = """
