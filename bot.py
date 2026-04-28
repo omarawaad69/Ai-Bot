@@ -146,6 +146,38 @@ def text_to_pdf(text: str, filepath: str):
                     filepath.replace('.pdf', '.docx')], check=True, timeout=30)
     os.remove(filepath.replace('.pdf', '.docx'))
 
+def convert_ogg_to_wav(input_path: str, output_path: str):
+    """تحويل ملف OGG إلى WAV باستخدام pydub"""
+    try:
+        from pydub import AudioSegment
+        audio = AudioSegment.from_file(input_path, format="ogg")
+        audio = audio.set_frame_rate(16000).set_channels(1)
+        audio.export(output_path, format="wav")
+        return True
+    except Exception as e:
+        logger.error(f"Error converting audio: {e}")
+        return False
+
+def transcribe_audio(file_path: str) -> str:
+    """تحويل الصوت إلى نص باستخدام Google Speech Recognition"""
+    try:
+        import speech_recognition as sr
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(file_path) as source:
+            audio = recognizer.record(source)
+        # تجربة العربية أولاً، ثم الإنجليزية
+        try:
+            return recognizer.recognize_google(audio, language="ar-AR")
+        except:
+            return recognizer.recognize_google(audio, language="en-US")
+    except sr.UnknownValueError:
+        return None
+    except sr.RequestError:
+        return None
+    except Exception as e:
+        logger.error(f"Transcription error: {e}")
+        return None
+
 # ==================== أوامر التحويل إلى ملفات ====================
 @router.message(Command("toword"))
 async def cmd_toword(message: types.Message, bot: Bot):
@@ -160,7 +192,7 @@ async def cmd_toword(message: types.Message, bot: Bot):
         os.remove(path)
     except Exception as e:
         logger.error(f"toword error: {e}")
-        await message.reply("❌ حدث خطأ أثناء إنشاء ملف Word.")
+        await message.reply("❌ حدث خطأ.")
 
 @router.message(Command("topdf"))
 async def cmd_topdf(message: types.Message, bot: Bot):
@@ -175,7 +207,7 @@ async def cmd_topdf(message: types.Message, bot: Bot):
         os.remove(path)
     except Exception as e:
         logger.error(f"topdf error: {e}")
-        await message.reply("❌ حدث خطأ أثناء إنشاء ملف PDF. تأكد من تثبيت LibreOffice.")
+        await message.reply("❌ حدث خطأ. تأكد من تثبيت LibreOffice.")
 
 # ==================== الأوامر العامة ====================
 @router.message(Command("start"))
@@ -277,14 +309,14 @@ async def handle_document(message: types.Message, bot: Bot):
             await message.reply("⏳ استغرق التحويل وقتاً طويلاً.")
         except Exception as e:
             logger.error(f"Convert error: {e}")
-            await message.reply("❌ حدث خطأ أثناء التحويل.")
+            await message.reply("❌ حدث خطأ.")
         return
     
     supported = ["application/pdf","text/plain",
                  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                  "application/msword"]
     if mime not in supported:
-        return await message.reply("⚠️ نوع غير مدعوم. أرسل PDF, TXT, أو Word.")
+        return await message.reply("⚠️ نوع غير مدعوم.")
     
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     try:
@@ -314,28 +346,56 @@ async def handle_document(message: types.Message, bot: Bot):
         logger.error(f"Doc error: {e}")
         await message.reply("عذراً، حدث خطأ.")
 
-# ==================== معالج الصوت ====================
+# ==================== معالج الصوت (إصلاح نهائي) ====================
 @router.message(F.voice)
 async def handle_voice(message: types.Message, bot: Bot):
     update_user_activity(message.from_user)
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
+    
+    ogg_path = f"/tmp/{message.from_user.id}_voice.ogg"
+    wav_path = f"/tmp/{message.from_user.id}_voice.wav"
+    
     try:
+        # 1. تنزيل الملف الصوتي
         voice = message.voice
-        info = await bot.get_file(voice.file_id)
+        file_info = await bot.get_file(voice.file_id)
         bio = BytesIO()
-        await bot.download_file(info.file_path, bio)
+        await bot.download_file(file_info.file_path, bio)
         bio.seek(0)
-        audio_bytes = bio.read()
+        
+        with open(ogg_path, "wb") as f:
+            f.write(bio.read())
         bio.close()
-        audio_part = {"inline_data": {"mime_type": voice.mime_type or "audio/ogg",
-                      "data": base64.b64encode(audio_bytes).decode()}}
-        prompt = "استمع إلى هذا المقطع الصوتي. قم بتفريغه إلى نص، ثم أجب على محتواه."
-        resp = await gemini_client.generate_with_media(prompt, [audio_part])
+        
+        # 2. تحويل OGG إلى WAV
+        if not convert_ogg_to_wav(ogg_path, wav_path):
+            await message.reply("🎤 عذراً، فشل تحويل الصوت. حاول مرة أخرى.")
+            return
+        
+        # 3. تحويل الصوت إلى نص
+        text = transcribe_audio(wav_path)
+        
+        if not text:
+            await message.reply("🎤 لم أتمكن من فهم الصوت. تحدث بوضووح وحاول مرة أخرى.")
+            return
+        
+        # 4. عرض النص المستخرج
+        await message.reply(f"🎤 *لقد فهمت:* _{text}_", parse_mode="Markdown")
+        
+        # 5. إرسال النص إلى Gemini للرد
+        resp = await gemini_client.generate(text)
         for i in range(0, len(resp), 4000):
             await message.answer(resp[i:i+4000])
+            
     except Exception as e:
         logger.error(f"Voice error: {e}")
-        await message.reply("🎤 عذراً، لم أتمكن من معالجة الصوت.")
+        await message.reply("🎤 عذراً، حدث خطأ أثناء معالجة الصوت.")
+    finally:
+        # تنظيف الملفات المؤقتة
+        if os.path.exists(ogg_path):
+            os.remove(ogg_path)
+        if os.path.exists(wav_path):
+            os.remove(wav_path)
 
 # ==================== معالج النصوص ====================
 @router.message(F.text)
@@ -356,4 +416,4 @@ async def main():
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    asyncio.run(main())                      
+    asyncio.run(main())
