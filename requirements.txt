@@ -5,4 +5,3 @@ Pillow
 PyPDF2
 python-docx
 SpeechRecognition
-pydub
