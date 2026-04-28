@@ -76,24 +76,6 @@ def update_user_activity(user: types.User):
     except Exception as e:
         logger.error(f"User activity error: {e}")
 
-def get_stats():
-    try:
-        conn = sqlite3.connect('bot_stats.db')
-        cursor = conn.cursor()
-        cursor.execute('SELECT COUNT(*) FROM users')
-        total_users = cursor.fetchone()[0]
-        today = datetime.now().strftime("%Y-%m-%d")
-        yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-        cursor.execute('SELECT active_users, total_messages FROM daily_stats WHERE date=?', (today,))
-        today_stats = cursor.fetchone() or (0,0)
-        cursor.execute('SELECT active_users, total_messages FROM daily_stats WHERE date=?', (yesterday,))
-        yesterday_stats = cursor.fetchone() or (0,0)
-        conn.close()
-        return total_users, today_stats, yesterday_stats
-    except Exception as e:
-        logger.error(f"Stats error: {e}")
-        return 0, (0,0), (0,0)
-
 # ==================== عميل Gemini ====================
 class AsyncGeminiClient:
     def __init__(self, model: str = "gemini-3.1-flash-lite-preview"):
@@ -269,14 +251,59 @@ async def cmd_admin(message: types.Message):
         await message.answer("⛔ عذراً، هذا الأمر متاح فقط لمالك البوت.")
         return
     
-    u, t, y = get_stats()
-    await message.answer(
-        f"📊 *لوحة الإحصائيات*\n\n"
-        f"👥 إجمالي المستخدمين: {u}\n"
-        f"📅 اليوم: {t[0]} نشط | {t[1]} رسالة\n"
-        f"📆 أمس: {y[0]} نشط | {y[1]} رسالة",
-        parse_mode="Markdown"
+    conn = sqlite3.connect('bot_stats.db')
+    cursor = conn.cursor()
+    
+    cursor.execute('SELECT COUNT(*) FROM users')
+    total_users = cursor.fetchone()[0]
+    
+    today = datetime.now().strftime("%Y-%m-%d")
+    cursor.execute('SELECT active_users, total_messages FROM daily_stats WHERE date=?', (today,))
+    today_stats = cursor.fetchone() or (0, 0)
+    
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    cursor.execute('SELECT active_users, total_messages FROM daily_stats WHERE date=?', (yesterday,))
+    yesterday_stats = cursor.fetchone() or (0, 0)
+    
+    cursor.execute('SELECT SUM(total_messages) FROM daily_stats')
+    total_messages_all_time = cursor.fetchone()[0] or 0
+    
+    one_day_ago = (datetime.now() - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute('SELECT COUNT(*) FROM users WHERE last_active >= ?', (one_day_ago,))
+    online_users = cursor.fetchone()[0]
+    
+    offline_users = total_users - online_users
+    
+    cursor.execute('SELECT username, first_name, last_active FROM users ORDER BY last_active DESC LIMIT 5')
+    recent_users = cursor.fetchall()
+    
+    conn.close()
+    
+    stats_message = (
+        "📊 *لوحة الإحصائيات المتقدمة*\n\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"👥 *إجمالي المستخدمين:* {total_users}\n"
+        f"🟢 *متصل (آخر 24 ساعة):* {online_users}\n"
+        f"🔴 *غير متصل:* {offline_users}\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        f"📅 *اليوم:*\n"
+        f"   - المستخدمين النشطين: {today_stats[0]}\n"
+        f"   - الرسائل: {today_stats[1]}\n\n"
+        f"📆 *أمس:*\n"
+        f"   - المستخدمين النشطين: {yesterday_stats[0]}\n"
+        f"   - الرسائل: {yesterday_stats[1]}\n\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"💬 *إجمالي الرسائل (كل الوقت):* {total_messages_all_time}\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "*آخر 5 مستخدمين نشطين:*\n"
     )
+    
+    for i, user in enumerate(recent_users, 1):
+        username = user[0] or "بدون يوزر"
+        first_name = user[1] or "بدون اسم"
+        stats_message += f"{i}. {first_name} (@{username})\n"
+    
+    await message.answer(stats_message, parse_mode="Markdown")
 
 @router.message(Command("reset"))
 async def cmd_reset(message: types.Message):
