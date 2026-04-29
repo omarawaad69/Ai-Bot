@@ -143,58 +143,24 @@ def create_pdf_file(text: str, filepath: str):
                    check=True, timeout=30)
     os.remove(docx_path)
 
-async def create_excel_file_from_text(user_text: str, filepath: str):
-    """محاولة إنشاء Excel احترافي، مع خطة بديلة في حالة الفشل"""
+def create_excel_file(text: str, filepath: str):
+    """تحويل النص إلى Excel مباشرة بدون Gemini"""
     from openpyxl import Workbook
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
-    
-    prompt_v1 = f"""
-    قم بتحليل النص التالي وتحويله إلى تنسيق JSON. البيانات تمثل جدولاً.
-    استنتج أسماء الأعمدة المناسبة.
-    
-    النص:
-    {user_text}
-    
-    أعد الرد بصيغة JSON فقط، بدون أي نص إضافي.
-    يجب أن يكون الـ JSON بالشكل التالي:
-    {{
-      "columns": ["اسم العمود 1", "اسم العمود 2", ...],
-      "rows": [
-        ["قيمة 1", "قيمة 2", ...],
-        ["قيمة 1", "قيمة 2", ...]
-      ]
-    }}
-    """
-    
-    data = None
-    for attempt in range(2):
-        try:
-            prompt = prompt_v1 if attempt == 0 else f"""
-            النص التالي هو بيانات أرسلها مستخدم. حولها إلى JSON.
-            
-            النص: {user_text}
-            
-            أعد JSON فقط بالشكل: {{"columns": [...], "rows": [[...]]}}
-            """
-            
-            json_response = await gemini_client.generate(prompt)
-            json_start = json_response.find('{')
-            json_end = json_response.rfind('}') + 1
-            if json_start != -1 and json_end != 0:
-                json_str = json_response[json_start:json_end]
-                data = json.loads(json_str)
-                if 'columns' in data and 'rows' in data:
-                    break
-        except:
-            continue
     
     wb = Workbook()
     ws = wb.active
     ws.title = "البيانات"
     
-    if data and data.get('columns') and data.get('rows'):
-        columns = data['columns']
-        rows = data['rows']
+    lines = text.strip().split('\n')
+    lines = [line.strip() for line in lines if line.strip()]
+    
+    if len(lines) >= 2:
+        headers = [h.strip() for h in lines[0].replace('،', ',').split(',')]
+        data_rows = []
+        for line in lines[1:]:
+            row = [cell.strip() for cell in line.replace('،', ',').split(',')]
+            data_rows.append(row)
         
         header_font = Font(name='Arial', size=14, bold=True, color='FFFFFF')
         header_fill = PatternFill(start_color='2F5496', end_color='2F5496', fill_type='solid')
@@ -206,20 +172,20 @@ async def create_excel_file_from_text(user_text: str, filepath: str):
             top=Side(style='thin'), bottom=Side(style='thin')
         )
         
-        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(columns))
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(headers))
         title_cell = ws['A1']
         title_cell.value = "مستند تم إنشاؤه بواسطة البوت"
         title_cell.font = Font(name='Arial', size=16, bold=True, color='2F5496')
         title_cell.alignment = Alignment(horizontal='center', vertical='center')
         
-        for col_idx, header in enumerate(columns, 1):
+        for col_idx, header in enumerate(headers, 1):
             cell = ws.cell(row=2, column=col_idx, value=header)
             cell.font = header_font
             cell.fill = header_fill
             cell.alignment = header_alignment
             cell.border = thin_border
         
-        for row_idx, row_data in enumerate(rows, 3):
+        for row_idx, row_data in enumerate(data_rows, 3):
             for col_idx, value in enumerate(row_data, 1):
                 cell = ws.cell(row=row_idx, column=col_idx, value=value)
                 cell.font = cell_font
@@ -241,20 +207,13 @@ async def create_excel_file_from_text(user_text: str, filepath: str):
             ws.column_dimensions[column_letter].width = adjusted_width
         
         ws.auto_filter.ref = ws.dimensions
-        
+    
     else:
-        ws['A1'] = "البيانات المدخلة"
+        ws['A1'] = "النص المحول"
         ws['A1'].font = Font(name='Arial', size=14, bold=True, color='2F5496')
-        
-        lines = user_text.strip().split('\n')
         for row_idx, line in enumerate(lines, 2):
-            parts = line.replace('،', ',').split(',')
-            for col_idx, part in enumerate(parts, 1):
-                ws.cell(row=row_idx, column=col_idx, value=part.strip())
-        
-        ws.column_dimensions['A'].width = 30
-        ws.column_dimensions['B'].width = 30
-        ws.column_dimensions['C'].width = 30
+            ws.cell(row=row_idx, column=1, value=line)
+        ws.column_dimensions['A'].width = 50
     
     wb.save(filepath)
 
@@ -354,7 +313,7 @@ def get_conversion_keyboard():
          InlineKeyboardButton(text="📊 PDF → Excel", callback_data="convert_pdf2excel")],
         [InlineKeyboardButton(text="📊 Excel → Word", callback_data="convert_excel2word"),
          InlineKeyboardButton(text="📄 Word → Excel", callback_data="convert_word2excel")],
-        [InlineKeyboardButton(text="🔄 تحويل من ملف لأي صيغة", callback_data="convert_any")]
+        [InlineKeyboardButton(text="🔄 أي صيغة لأي صيغة", callback_data="convert_any")]
     ])
     return keyboard
 
@@ -375,11 +334,10 @@ async def handle_conversion_callback(callback: CallbackQuery):
     if data == "convert_any":
         await callback.message.answer(
             "🔄 *تحويل من أي صيغة لأي صيغة*\n\n"
-            "أرسل الملف الذي تريد تحويله مع تعليق يحدد الصيغة المطلوبة:\n\n"
+            "أرسل الملف مع تعليق يحدد الصيغة:\n"
             "• *حول لـ pdf*\n"
             "• *حول لـ word*\n"
-            "• *حول لـ excel*\n\n"
-            "مثال: أرسل ملف Excel واكتب في التعليق: *حول لـ pdf*",
+            "• *حول لـ excel*",
             parse_mode="Markdown"
         )
         await callback.answer("تم")
@@ -417,7 +375,7 @@ async def cmd_start(message: types.Message):
         "- الإجابة عن أي سؤال\n"
         "- كتابة وشرح الأكواد البرمجية\n"
         "- تحويل النصوص إلى Word أو PDF أو Excel\n"
-        "- تحويل الملفات بين الصيغ (Excel ⇄ Word ⇄ PDF)\n"
+        "- تحويل الملفات بين الصيغ\n"
         "- تحليل الصور والمستندات\n"
         "- الاستماع إلى الرسائل الصوتية\n"
         "- تصميم برومبت احترافي للصور\n\n"
@@ -514,7 +472,7 @@ async def handle_buttons(message: types.Message):
     elif message.text == "📊 تحويل لإكسيل":
         await message.answer(
             "📊 أرسل لي النص الذي تريد تحويله إلى ملف Excel.\n\n"
-            "مثال: *حولي النص دا لملف اكسيل: الاسم, العمر, المدينة. أحمد, 25, القاهرة.*",
+            "مثال: *حولي النص دا لملف اكسيل: الاسم, العمر, المدينة\nأحمد, 25, القاهرة*",
             parse_mode="Markdown"
         )
     elif message.text == "🎤 إرسال صوت":
@@ -559,7 +517,7 @@ async def handle_message(message: types.Message):
         await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
         try:
             path = f"/tmp/{message.from_user.id}_doc.xlsx"
-            await create_excel_file_from_text(content, path)
+            create_excel_file(content, path)
             await message.reply_document(FSInputFile(path), caption="📊 ملف Excel جاهز!")
             os.remove(path)
             return
@@ -645,7 +603,7 @@ async def handle_photo(message: types.Message, bot: Bot):
 async def handle_document(message: types.Message, bot: Bot):
     update_user_activity(message.from_user)
     doc = message.document
-    fname = doc.file_name or "مستند"
+    fname = doc.file_name or "مستند.xlsx"
     mime = doc.mime_type or ""
     cap = message.caption or ""
     user_id = message.from_user.id
@@ -656,12 +614,9 @@ async def handle_document(message: types.Message, bot: Bot):
     
     if not target and cap:
         c = cap.lower()
-        if "excel" in c or "اكسيل" in c or "xlsx" in c:
-            target = "xlsx"
-        elif "pdf" in c:
-            target = "pdf"
-        elif "docx" in c or "word" in c or "وورد" in c:
-            target = "docx"
+        if "pdf" in c: target = "pdf"
+        elif "word" in c or "docx" in c: target = "docx"
+        elif "excel" in c or "xlsx" in c: target = "xlsx"
     
     if target:
         await bot.send_chat_action(chat_id=message.chat.id, action="typing")
@@ -669,11 +624,7 @@ async def handle_document(message: types.Message, bot: Bot):
             file_info = await bot.get_file(doc.file_id)
             file_bytes = await bot.download_file(file_info.file_path)
             
-            original_ext = os.path.splitext(fname)[1].lower()
-            if not original_ext:
-                original_ext = ".tmp"
-            
-            inpath = f"/tmp/{user_id}_input{original_ext}"
+            inpath = f"/tmp/{user_id}_{fname}"
             with open(inpath, 'wb') as f:
                 f.write(file_bytes.read())
             
@@ -685,41 +636,41 @@ async def handle_document(message: types.Message, bot: Bot):
                 capture_output=True, text=True, timeout=60
             )
             
-            logger.info(f"LibreOffice result: {result.returncode}")
+            expected_out = f"/tmp/{os.path.splitext(fname)[0]}.{target}"
             
-            expected_out = f"/tmp/{os.path.splitext(os.path.basename(inpath))[0]}.{target}"
-            
-            if os.path.exists(expected_out):
+            if os.path.exists(expected_out) and os.path.getsize(expected_out) > 100:
                 await message.reply_document(
                     FSInputFile(expected_out),
                     caption=f"✅ تم التحويل إلى {target.upper()}"
                 )
-                os.remove(expected_out)
             else:
                 possible_files = glob.glob(f"/tmp/*.{target}")
-                if possible_files:
-                    latest_file = max(possible_files, key=os.path.getctime)
-                    await message.reply_document(
-                        FSInputFile(latest_file),
-                        caption=f"✅ تم التحويل إلى {target.upper()}"
-                    )
-                    os.remove(latest_file)
-                else:
+                found = False
+                for pf in possible_files:
+                    if os.path.getsize(pf) > 100:
+                        await message.reply_document(
+                            FSInputFile(pf),
+                            caption=f"✅ تم التحويل إلى {target.upper()}"
+                        )
+                        os.remove(pf)
+                        found = True
+                        break
+                
+                if not found:
                     await message.reply(
-                        "❌ فشل التحويل. تأكد من:\n"
-                        "1️⃣ الملف غير تالف\n"
-                        "2️⃣ الملف غير محمي بكلمة مرور\n"
-                        "3️⃣ حجم الملف مناسب"
+                        "❌ فشل التحويل.\n\n"
+                        "تأكد من:\n"
+                        "• الملف غير تالف\n"
+                        "• الملف غير محمي بكلمة مرور\n"
+                        "• حجم الملف مناسب"
                     )
             
-            if os.path.exists(inpath):
-                os.remove(inpath)
-                
-        except subprocess.TimeoutExpired:
-            await message.reply("⏳ استغرق التحويل وقتاً طويلاً. جرب ملفاً أصغر.")
+            if os.path.exists(inpath): os.remove(inpath)
+            if os.path.exists(expected_out): os.remove(expected_out)
+            
         except Exception as e:
             logger.error(f"Convert error: {e}")
-            await message.reply(f"❌ حدث خطأ أثناء التحويل: {str(e)[:100]}")
+            await message.reply("❌ حدث خطأ أثناء التحويل.")
         return
     
     supported = [
@@ -733,10 +684,7 @@ async def handle_document(message: types.Message, bot: Bot):
     if mime not in supported:
         return await message.reply(
             "⚠️ نوع الملف غير مدعوم.\n\n"
-            "🔄 *للتحويل:* اضغط على زر *تحويل ملفات* في القائمة الرئيسية، أو أرسل الملف مع تعليق:\n"
-            "• *حول لـ pdf*\n"
-            "• *حول لـ word*\n"
-            "• *حول لـ excel*",
+            "🔄 *للتحويل:* اضغط على زر *تحويل ملفات* في القائمة.",
             parse_mode="Markdown"
         )
     
