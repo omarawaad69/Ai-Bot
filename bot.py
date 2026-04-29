@@ -345,11 +345,11 @@ async def handle_buttons(message: types.Message):
         await message.answer("🎤 أرسل لي رسالة صوتية وسأقوم بتحويلها إلى نص والرد عليك.")
     
     elif message.text == "👨‍💻 تواصل مع المبرمج":
-        await message.answer(
-            f"👨‍💻 *المبرمج:* {DEVELOPER_NAME}\n\n"
-            "📧 للتواصل، ابحث عن الحساب في تيليجرام.",
-            parse_mode="Markdown"
-        )
+    await message.answer(
+        f"👨‍💻 *المبرمج:* {DEVELOPER_NAME}\n\n"
+        f"📧 *للاتصال:* @omarawaad68",
+        parse_mode="Markdown"
+    )
 
 # ==================== معالج النصوص ====================
 @router.message(F.text)
