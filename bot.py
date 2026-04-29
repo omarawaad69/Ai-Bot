@@ -5,13 +5,14 @@ import time
 import base64
 import sqlite3
 import subprocess
+import json
 from io import BytesIO
 from datetime import datetime, timedelta
 from PIL import Image
 
 from aiogram import Bot, Dispatcher, Router, types, F
 from aiogram.filters import Command
-from aiogram.types import FSInputFile, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import FSInputFile, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types as genai_types
@@ -23,13 +24,12 @@ logger = logging.getLogger(__name__)
 
 router = Router()
 
-# ==================== معرف الأدمن ====================
 ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "7361263893"))
-
-# ==================== معلومات المبرمج ====================
 DEVELOPER_NAME = "Omar Abd El Gawaad"
 
-# ==================== الشخصية ====================
+# تخزين مؤقت لاختيارات المستخدمين
+user_conversion_choice = {}
+
 SYSTEM_PROMPT = """
 أنت "مستشار الذكاء الاصطناعي الخارق". أنت تجمع بين خبير موسوعي ومبرمج عبقري. هدفك تقديم إجابات دقيقة واحترافية في كل المجالات، مع قدرة استثنائية على البرمجة.
 
@@ -42,7 +42,6 @@ SYSTEM_PROMPT = """
 5.  **الأمان:** ترفض أي طلب لإنشاء محتوى ضار أو غير قانوني.
 """
 
-# ==================== قاعدة البيانات ====================
 def init_db():
     try:
         conn = sqlite3.connect('bot_stats.db')
@@ -76,7 +75,6 @@ def update_user_activity(user: types.User):
     except Exception as e:
         logger.error(f"User activity error: {e}")
 
-# ==================== عميل Gemini ====================
 class AsyncGeminiClient:
     def __init__(self, model: str = "gemini-3.1-flash-lite-preview"):
         self.client = genai.Client()
@@ -117,7 +115,6 @@ class AsyncGeminiClient:
 
 gemini_client = AsyncGeminiClient()
 
-# ==================== دوال مساعدة ====================
 def convert_image_to_png(image_bytes: bytes):
     try:
         img = Image.open(BytesIO(image_bytes))
@@ -146,11 +143,42 @@ def create_pdf_file(text: str, filepath: str):
                    check=True, timeout=30)
     os.remove(docx_path)
 
-def create_excel_file(text: str, filepath: str):
-    """تحويل النص إلى ملف Excel منظم"""
+async def create_excel_file_from_text(user_text: str, filepath: str):
     from openpyxl import Workbook
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+
+    prompt_for_json = f"""
+    قم بتحليل النص التالي وتحويله إلى تنسيق JSON. البيانات تمثل جدولاً.
+    استنتج أسماء الأعمدة المناسبة.
     
+    النص:
+    {user_text}
+    
+    أعد الرد بصيغة JSON فقط، بدون أي نص إضافي.
+    يجب أن يكون الـ JSON بالشكل التالي:
+    {{
+      "columns": ["اسم العمود 1", "اسم العمود 2", ...],
+      "rows": [
+        ["قيمة 1", "قيمة 2", ...],
+        ["قيمة 1", "قيمة 2", ...]
+      ]
+    }}
+    """
+    
+    json_response = await gemini_client.generate(prompt_for_json)
+    
+    try:
+        json_start = json_response.find('{')
+        json_end = json_response.rfind('}') + 1
+        if json_start != -1 and json_end != 0:
+            json_str = json_response[json_start:json_end]
+            data = json.loads(json_str)
+        else:
+            raise ValueError("No JSON found")
+    except Exception as e:
+        logger.error(f"JSON parsing error: {e}")
+        return create_excel_file_fallback(user_text, filepath)
+
     wb = Workbook()
     ws = wb.active
     ws.title = "البيانات"
@@ -159,63 +187,68 @@ def create_excel_file(text: str, filepath: str):
     header_fill = PatternFill(start_color='2F5496', end_color='2F5496', fill_type='solid')
     header_alignment = Alignment(horizontal='center', vertical='center')
     cell_font = Font(name='Arial', size=12)
-    cell_alignment = Alignment(horizontal='right', vertical='center')
+    cell_alignment = Alignment(horizontal='center', vertical='center')
     thin_border = Border(
         left=Side(style='thin'), right=Side(style='thin'),
         top=Side(style='thin'), bottom=Side(style='thin')
     )
     
-    ws.merge_cells('A1:D1')
+    columns = data.get('columns', [])
+    rows = data.get('rows', [])
+    
+    if columns:
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(columns))
     title_cell = ws['A1']
     title_cell.value = "مستند تم إنشاؤه بواسطة البوت"
-    title_cell.font = header_font
-    title_cell.fill = header_fill
-    title_cell.alignment = header_alignment
+    title_cell.font = Font(name='Arial', size=16, bold=True, color='2F5496')
+    title_cell.alignment = Alignment(horizontal='center', vertical='center')
     
-    headers = ['#', 'النص', 'عدد الكلمات', 'عدد الأحرف']
-    for col, header in enumerate(headers, 1):
-        cell = ws.cell(row=2, column=col, value=header)
+    for col_idx, header in enumerate(columns, 1):
+        cell = ws.cell(row=2, column=col_idx, value=header)
         cell.font = header_font
         cell.fill = header_fill
         cell.alignment = header_alignment
         cell.border = thin_border
     
+    for row_idx, row_data in enumerate(rows, 3):
+        for col_idx, value in enumerate(row_data, 1):
+            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            cell.font = cell_font
+            cell.alignment = cell_alignment
+            cell.border = thin_border
+            if row_idx % 2 == 0:
+                cell.fill = PatternFill(start_color='D6E4F0', end_color='D6E4F0', fill_type='solid')
+    
+    for col in ws.columns:
+        max_length = 0
+        column_letter = col[0].column_letter
+        for cell in col:
+            try:
+                if len(str(cell.value)) > max_length:
+                    max_length = len(str(cell.value))
+            except:
+                pass
+        adjusted_width = min(max_length + 4, 50)
+        ws.column_dimensions[column_letter].width = adjusted_width
+    
+    if columns:
+        ws.auto_filter.ref = ws.dimensions
+    
+    wb.save(filepath)
+
+def create_excel_file_fallback(text: str, filepath: str):
+    from openpyxl import Workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "البيانات"
     lines = text.strip().split('\n')
-    for row_idx, line in enumerate(lines, 3):
-        if line.strip():
-            cell_num = ws.cell(row=row_idx, column=1, value=row_idx - 2)
-            cell_num.font = cell_font
-            cell_num.alignment = Alignment(horizontal='center', vertical='center')
-            cell_num.border = thin_border
-            
-            cell_text = ws.cell(row=row_idx, column=2, value=line.strip())
-            cell_text.font = cell_font
-            cell_text.alignment = cell_alignment
-            cell_text.border = thin_border
-            
-            word_count = len(line.strip().split())
-            cell_words = ws.cell(row=row_idx, column=3, value=word_count)
-            cell_words.font = cell_font
-            cell_words.alignment = Alignment(horizontal='center', vertical='center')
-            cell_words.border = thin_border
-            
-            char_count = len(line.strip())
-            cell_chars = ws.cell(row=row_idx, column=4, value=char_count)
-            cell_chars.font = cell_font
-            cell_chars.alignment = Alignment(horizontal='center', vertical='center')
-            cell_chars.border = thin_border
-    
-    ws.column_dimensions['A'].width = 8
-    ws.column_dimensions['B'].width = 50
-    ws.column_dimensions['C'].width = 15
-    ws.column_dimensions['D'].width = 15
-    
+    for row_idx, line in enumerate(lines, 1):
+        ws.cell(row=row_idx, column=1, value=line.strip())
     wb.save(filepath)
 
 def detect_conversion_intent(text: str):
     text_lower = text.lower()
     
-    # أنماط Excel
     excel_patterns = [
         "حولي النص التالي لملف اكسيل", "حولي النص التالي لexcel",
         "حولي النص دا لملف اكسيل", "حولي النص دا لexcel",
@@ -223,14 +256,12 @@ def detect_conversion_intent(text: str):
         "حولي النص لملف اكسيل", "حولي النص لexcel",
         "حول النص لملف اكسيل", "حول النص لexcel",
         "حولي لملف اكسيل", "حول لملف اكسيل",
-        "حولي لexcel", "حول لexcel",
         "ملف اكسيل", "ملف excel", "اكسيل", "excel", "xlsx",
         "خليه اكسيل", "خليه excel", "ابعتلي اكسيل",
         "انزله اكسيل", "حمله اكسيل",
         "اعملي ملف اكسيل", "اعمل ملف excel",
     ]
     
-    # أنماط Word
     word_patterns = [
         "حولي النص التالي لملف وورد", "حولي النص التالي لword",
         "حولي النص دا لملف وورد", "حولي النص دا لword",
@@ -238,21 +269,18 @@ def detect_conversion_intent(text: str):
         "حولي النص لملف وورد", "حولي النص لword",
         "حول النص لملف وورد", "حول النص لword",
         "حولي لملف وورد", "حول لملف وورد",
-        "حولي لوورد", "حول لوورد",
         "ملف وورد", "ملف word", "وورد", "word", "docx",
         "خليه وورد", "خليه word", "ابعتلي وورد",
         "انزله وورد", "حمله وورد",
         "اعملي ملف وورد", "اعمل ملف word",
     ]
     
-    # أنماط PDF
     pdf_patterns = [
         "حولي النص التالي لملف pdf", "حولي النص التالي لpdf",
         "حولي النص دا لملف pdf", "حولي النص دا لpdf",
         "حول النص دا لملف pdf", "حول النص دا لpdf",
         "حولي النص لpdf", "حول النص لpdf",
         "حولي لملف pdf", "حول لملف pdf",
-        "حولي لpdf", "حول لpdf",
         "ملف pdf", "بي دي اف", "pdf",
         "خليه pdf", "خليه بي دي اف",
         "ابعتلي pdf", "انزله pdf", "حمله pdf",
@@ -306,6 +334,68 @@ def detect_conversion_intent(text: str):
     
     return None, None
 
+def convert_file(input_path: str, output_path: str, target_format: str):
+    output_dir = os.path.dirname(output_path)
+    os.makedirs(output_dir, exist_ok=True)
+    subprocess.run(
+        ['libreoffice', '--headless', '--convert-to', target_format,
+         '--outdir', output_dir, input_path],
+        check=True, timeout=60
+    )
+
+# ==================== قائمة تحويل الملفات ====================
+def get_conversion_keyboard():
+    """إنشاء قائمة أزرار منبثقة لتحويل الملفات"""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📄 Word → PDF", callback_data="convert_word2pdf"),
+         InlineKeyboardButton(text="📄 PDF → Word", callback_data="convert_pdf2word")],
+        [InlineKeyboardButton(text="📊 Excel → PDF", callback_data="convert_excel2pdf"),
+         InlineKeyboardButton(text="📊 PDF → Excel", callback_data="convert_pdf2excel")],
+        [InlineKeyboardButton(text="📊 Excel → Word", callback_data="convert_excel2word"),
+         InlineKeyboardButton(text="📄 Word → Excel", callback_data="convert_word2excel")],
+        [InlineKeyboardButton(text="🔄 تحويل من ملف لأي صيغة", callback_data="convert_any")]
+    ])
+    return keyboard
+
+# ==================== معالج الأزرار المنبثقة ====================
+@router.callback_query()
+async def handle_conversion_callback(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    data = callback.data
+    
+    conversion_map = {
+        "convert_word2pdf": ("docx", "pdf", "Word → PDF"),
+        "convert_pdf2word": ("pdf", "docx", "PDF → Word"),
+        "convert_excel2pdf": ("xlsx", "pdf", "Excel → PDF"),
+        "convert_pdf2excel": ("pdf", "xlsx", "PDF → Excel"),
+        "convert_excel2word": ("xlsx", "docx", "Excel → Word"),
+        "convert_word2excel": ("docx", "xlsx", "Word → Excel"),
+    }
+    
+    if data == "convert_any":
+        await callback.message.answer(
+            "🔄 *تحويل من أي صيغة لأي صيغة*\n\n"
+            "أرسل الملف الذي تريد تحويله مع تعليق يحدد الصيغة المطلوبة:\n\n"
+            "• *حول لـ pdf*\n"
+            "• *حول لـ word*\n"
+            "• *حول لـ excel*\n\n"
+            "مثال: أرسل ملف Excel واكتب في التعليق: *حول لـ pdf*",
+            parse_mode="Markdown"
+        )
+        await callback.answer("تم")
+        return
+    
+    if data in conversion_map:
+        source, target, label = conversion_map[data]
+        user_conversion_choice[user_id] = (source, target, label)
+        
+        await callback.message.answer(
+            f"📁 *{label}*\n\n"
+            f"أرسل ملف *{source.upper()}* ليتم تحويله إلى *{target.upper()}*",
+            parse_mode="Markdown"
+        )
+        await callback.answer("تم")
+
 # ==================== الأوامر العامة ====================
 @router.message(Command("start"))
 async def cmd_start(message: types.Message):
@@ -315,7 +405,8 @@ async def cmd_start(message: types.Message):
         keyboard=[
             [KeyboardButton(text="💬 ابدأ محادثة"), KeyboardButton(text="🖼️ تحليل صورة")],
             [KeyboardButton(text="📄 تحويل نص لملف"), KeyboardButton(text="📊 تحويل لإكسيل")],
-            [KeyboardButton(text="🎤 إرسال صوت"), KeyboardButton(text="👨‍💻 تواصل مع المبرمج")]
+            [KeyboardButton(text="🎤 إرسال صوت"), KeyboardButton(text="👨‍💻 تواصل مع المبرمج")],
+            [KeyboardButton(text="🔄 تحويل ملفات")]
         ],
         resize_keyboard=True,
         input_field_placeholder="اختر من القائمة..."
@@ -326,7 +417,8 @@ async def cmd_start(message: types.Message):
         "✨ ماذا يمكنني أن أفعل لك؟\n"
         "- الإجابة عن أي سؤال\n"
         "- كتابة وشرح الأكواد البرمجية\n"
-        "- تحويل النصوص إلى ملفات Word أو PDF أو Excel\n"
+        "- تحويل النصوص إلى Word أو PDF أو Excel\n"
+        "- تحويل الملفات بين الصيغ (Excel ⇄ Word ⇄ PDF)\n"
         "- تحليل الصور والمستندات\n"
         "- الاستماع إلى الرسائل الصوتية\n"
         "- تصميم برومبت احترافي للصور\n\n"
@@ -405,16 +497,14 @@ async def cmd_reset(message: types.Message):
     await message.answer("🔄 تم مسح سياق المحادثة.")
 
 # ==================== معالج الأزرار التفاعلية ====================
-@router.message(F.text.in_({"💬 ابدأ محادثة", "🖼️ تحليل صورة", "📄 تحويل نص لملف", "📊 تحويل لإكسيل", "🎤 إرسال صوت", "👨‍💻 تواصل مع المبرمج"}))
+@router.message(F.text.in_({"💬 ابدأ محادثة", "🖼️ تحليل صورة", "📄 تحويل نص لملف", "📊 تحويل لإكسيل", "🎤 إرسال صوت", "👨‍💻 تواصل مع المبرمج", "🔄 تحويل ملفات"}))
 async def handle_buttons(message: types.Message):
     update_user_activity(message.from_user)
     
     if message.text == "💬 ابدأ محادثة":
         await message.answer("📝 أنا جاهز! أرسل سؤالك أو طلبك وسأجيبك فوراً.")
-    
     elif message.text == "🖼️ تحليل صورة":
         await message.answer("🖼️ أرسل لي الصورة التي تريد تحليلها.")
-    
     elif message.text == "📄 تحويل نص لملف":
         await message.answer(
             "📄 أرسل لي النص الذي تريد تحويله.\n\n"
@@ -423,28 +513,30 @@ async def handle_buttons(message: types.Message):
             "• *اكسيل:* حولي النص دا لملف اكسيل: ...",
             parse_mode="Markdown"
         )
-    
     elif message.text == "📊 تحويل لإكسيل":
         await message.answer(
             "📊 أرسل لي النص الذي تريد تحويله إلى ملف Excel.\n\n"
-            "مثال: *حولي النص دا لملف اكسيل: اسم,عمر,مدينة*",
+            "مثال: *حولي النص دا لملف اكسيل: الاسم, العمر, المدينة. أحمد, 25, القاهرة.*",
             parse_mode="Markdown"
         )
-    
     elif message.text == "🎤 إرسال صوت":
         await message.answer(
             "🎤 أرسل لي رسالة صوتية وسأقوم بما يلي:\n\n"
             "1️⃣ تحويلها إلى نص مكتوب\n"
             "2️⃣ الرد على محتواها\n"
-            "3️⃣ يمكنك أيضاً طلب إنشاء ملف Word أو PDF أو Excel من النص المستخرج\n\n"
-            "💡 بعد أن تستمع للرد، قل لي: *حولي النص دا لملف وورد* أو *حولي النص دا لملف PDF*"
+            "3️⃣ يمكنك أيضاً طلب إنشاء ملف Word أو PDF أو Excel من النص المستخرج"
         )
-    
     elif message.text == "👨‍💻 تواصل مع المبرمج":
         await message.answer(
             f"👨‍💻 *المبرمج:* {DEVELOPER_NAME}\n\n"
             "📧 *للتواصل:* ابحث عن omarawaad68 في تيليجرام.",
             parse_mode="Markdown"
+        )
+    elif message.text == "🔄 تحويل ملفات":
+        await message.answer(
+            "🔄 *اختر نوع التحويل الذي تريده:*",
+            parse_mode="Markdown",
+            reply_markup=get_conversion_keyboard()
         )
 
 # ==================== معالج النصوص ====================
@@ -454,7 +546,7 @@ async def handle_message(message: types.Message):
     user_text = message.text
     text_lower = user_text.lower()
 
-    if user_text in ["💬 ابدأ محادثة", "🖼️ تحليل صورة", "📄 تحويل نص لملف", "📊 تحويل لإكسيل", "🎤 إرسال صوت", "👨‍💻 تواصل مع المبرمج"]:
+    if user_text in ["💬 ابدأ محادثة", "🖼️ تحليل صورة", "📄 تحويل نص لملف", "📊 تحويل لإكسيل", "🎤 إرسال صوت", "👨‍💻 تواصل مع المبرمج", "🔄 تحويل ملفات"]:
         return
 
     intent, content = detect_conversion_intent(user_text)
@@ -470,7 +562,7 @@ async def handle_message(message: types.Message):
         await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
         try:
             path = f"/tmp/{message.from_user.id}_doc.xlsx"
-            create_excel_file(content, path)
+            await create_excel_file_from_text(content, path)
             await message.reply_document(FSInputFile(path), caption="📊 ملف Excel جاهز!")
             os.remove(path)
             return
@@ -553,7 +645,7 @@ async def handle_photo(message: types.Message, bot: Bot):
         logger.error(f"Photo error: {e}")
         await message.reply("عذراً، حدث خطأ.")
 
-# ==================== معالج المستندات ====================
+# ==================== معالج المستندات (تحويل + تحليل) ====================
 @router.message(F.document)
 async def handle_document(message: types.Message, bot: Bot):
     update_user_activity(message.from_user)
@@ -561,43 +653,73 @@ async def handle_document(message: types.Message, bot: Bot):
     fname = doc.file_name or "مستند"
     mime = doc.mime_type or ""
     cap = message.caption or ""
+    user_id = message.from_user.id
     
+    # 1. التحقق من وجود اختيار مسبق للتحويل عبر الأزرار
     target = None
-    if cap:
+    if user_id in user_conversion_choice:
+        source, target, label = user_conversion_choice[user_id]
+        del user_conversion_choice[user_id]
+    
+    # 2. إذا لم يكن هناك اختيار مسبق، نتحقق من التعليق
+    if not target and cap:
         c = cap.lower()
-        if "pdf" in c: target = "pdf"
-        elif "docx" in c or "word" in c: target = "docx"
+        if "excel" in c or "اكسيل" in c or "xlsx" in c:
+            target = "xlsx"
+        elif "pdf" in c:
+            target = "pdf"
+        elif "docx" in c or "word" in c or "وورد" in c:
+            target = "docx"
     
     if target:
         await bot.send_chat_action(chat_id=message.chat.id, action="typing")
         try:
             info = await bot.get_file(doc.file_id)
             dl = await bot.download_file(info.file_path)
-            inpath = f"/tmp/{fname}"
-            with open(inpath,'wb') as f: f.write(dl.read())
-            outdir = "/tmp/converted"
-            os.makedirs(outdir, exist_ok=True)
-            subprocess.run(['libreoffice','--headless','--convert-to',target,
-                            '--outdir',outdir,inpath], check=True, timeout=60)
-            base = os.path.splitext(fname)[0]
-            outfile = os.path.join(outdir, f"{base}.{target}")
-            if os.path.exists(outfile):
-                await message.reply_document(FSInputFile(outfile),
-                    caption=f"✅ تم التحويل إلى {target.upper()}")
+            inpath = f"/tmp/{user_id}_{fname}"
+            with open(inpath, 'wb') as f:
+                f.write(dl.read())
+            
+            base_name = os.path.splitext(fname)[0]
+            outpath = f"/tmp/{user_id}_{base_name}.{target}"
+            
+            convert_file(inpath, outpath, target)
+            
+            if os.path.exists(outpath):
+                await message.reply_document(
+                    FSInputFile(outpath),
+                    caption=f"✅ تم التحويل إلى {target.upper()}"
+                )
             else:
                 await message.reply("❌ فشل التحويل.")
+            
             os.remove(inpath)
-            if os.path.exists(outfile): os.remove(outfile)
+            if os.path.exists(outpath):
+                os.remove(outpath)
+                
         except Exception as e:
             logger.error(f"Convert error: {e}")
-            await message.reply("❌ حدث خطأ.")
+            await message.reply("❌ حدث خطأ أثناء التحويل.")
         return
     
-    supported = ["application/pdf","text/plain",
-                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                 "application/msword"]
+    # 3. تحليل المستندات
+    supported = [
+        "application/pdf", "text/plain",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.ms-excel",
+        "text/csv"
+    ]
     if mime not in supported:
-        return await message.reply("⚠️ نوع غير مدعوم.")
+        return await message.reply(
+            "⚠️ نوع الملف غير مدعوم.\n\n"
+            "🔄 *للتحويل:* اضغط على زر *تحويل ملفات* في القائمة الرئيسية، أو أرسل الملف مع تعليق:\n"
+            "• *حول لـ pdf*\n"
+            "• *حول لـ word*\n"
+            "• *حول لـ excel*",
+            parse_mode="Markdown"
+        )
     
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     try:
@@ -607,22 +729,33 @@ async def handle_document(message: types.Message, bot: Bot):
         bio.seek(0)
         fb = bio.read()
         text = ""
-        if mime == "text/plain":
-            text = fb.decode('utf-8','ignore')
+        
+        if mime == "text/plain" or mime == "text/csv":
+            text = fb.decode('utf-8', errors='ignore')
         elif mime == "application/pdf":
             import PyPDF2
             r = PyPDF2.PdfReader(BytesIO(fb))
-            for p in r.pages: text += p.extract_text() or ""
+            for p in r.pages:
+                text += p.extract_text() or ""
         elif "word" in mime:
             import docx as dx
             dxf = dx.Document(BytesIO(fb))
             text = "\n".join([p.text for p in dxf.paragraphs])
+        elif "excel" in mime or "spreadsheet" in mime:
+            from openpyxl import load_workbook
+            wb = load_workbook(BytesIO(fb), read_only=True)
+            ws = wb.active
+            for row in ws.iter_rows(values_only=True):
+                text += " | ".join([str(cell) if cell else "" for cell in row]) + "\n"
+        
         if not text.strip():
             return await message.reply("⚠️ لم أستطع استخراج نص.")
+        
         prompt = f"حلل هذا المستند ({fname}). {cap or 'قدم ملخصاً'}\n\n{text[:10000]}"
         resp = await gemini_client.generate(prompt)
         for i in range(0, len(resp), 4000):
             await message.reply(resp[i:i+4000])
+            
     except Exception as e:
         logger.error(f"Doc error: {e}")
         await message.reply("عذراً، حدث خطأ.")
@@ -694,7 +827,6 @@ async def handle_voice(message: types.Message, bot: Bot):
         if os.path.exists(ogg_path): os.remove(ogg_path)
         if os.path.exists(wav_path): os.remove(wav_path)
 
-# ==================== الرئيسية ====================
 async def main():
     init_db()
     bot = Bot(token=os.getenv("TELEGRAM_BOT_TOKEN"))
