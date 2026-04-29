@@ -336,9 +336,9 @@ async def handle_buttons(message: types.Message):
     elif message.text == "👨‍💻 تواصل مع المبرمج":
         await message.answer(
             f"👨‍💻 *المبرمج:* {DEVELOPER_NAME}\n\n"
-            "📧 *للتواصل:* " + "@omarawaad68",
+            "📧 *للتواصل:* @" + "omarawaad68",
             parse_mode="Markdown"
-       )
+        )
 
 # ==================== معالج النصوص ====================
 @router.message(F.text)
