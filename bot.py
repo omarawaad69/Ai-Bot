@@ -325,12 +325,18 @@ async def handle_buttons(message: types.Message):
         )
     
     elif message.text == "🎤 إرسال صوت":
-        await message.answer("🎤 أرسل لي رسالة صوتية وسأقوم بتحويلها إلى نص والرد عليك.")
+        await message.answer(
+            "🎤 أرسل لي رسالة صوتية وسأقوم بما يلي:\n\n"
+            "1️⃣ تحويلها إلى نص مكتوب\n"
+            "2️⃣ الرد على محتواها\n"
+            "3️⃣ يمكنك أيضاً طلب إنشاء ملف Word أو PDF من النص المستخرج\n\n"
+            "💡 بعد أن تستمع للرد، قل لي: *حولي النص دا لملف وورد* أو *حولي النص دا لملف PDF*"
+        )
     
     elif message.text == "👨‍💻 تواصل مع المبرمج":
         await message.answer(
             f"👨‍💻 *المبرمج:* {DEVELOPER_NAME}\n\n"
-            "📧 *للاتصال:* " + "@omarawaad68",
+            f"📧 *للتواصل:* @omarawaad68",
             parse_mode="Markdown"
         )
 
@@ -341,7 +347,6 @@ async def handle_message(message: types.Message):
     user_text = message.text
     text_lower = user_text.lower()
 
-    # تجنب معالجة أزرار القائمة
     if user_text in ["💬 ابدأ محادثة", "🖼️ تحليل صورة", "📄 تحويل نص لملف", "🎤 إرسال صوت", "👨‍💻 تواصل مع المبرمج"]:
         return
 
