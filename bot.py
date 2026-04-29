@@ -17,6 +17,7 @@ from aiogram.types import FSInputFile, ReplyKeyboardMarkup, KeyboardButton, Inli
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types as genai_types
+from aiohttp import web
 
 load_dotenv()
 
@@ -144,7 +145,6 @@ def create_pdf_file(text: str, filepath: str):
     os.remove(docx_path)
 
 def create_excel_file(text: str, filepath: str):
-    """تحويل النص إلى Excel مباشرة بدون Gemini"""
     from openpyxl import Workbook
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
     
@@ -425,28 +425,14 @@ async def cmd_admin(message: types.Message):
     conn.close()
     
     stats_message = (
-        "📊 *لوحة الإحصائيات المتقدمة*\n\n"
-        "━━━━━━━━━━━━━━━━━━\n"
-        f"👥 *إجمالي المستخدمين:* {total_users}\n"
-        f"🟢 *متصل (آخر 24 ساعة):* {online_users}\n"
-        f"🔴 *غير متصل:* {offline_users}\n"
-        "━━━━━━━━━━━━━━━━━━\n\n"
-        f"📅 *اليوم:*\n"
-        f"   - المستخدمين النشطين: {today_stats[0]}\n"
-        f"   - الرسائل: {today_stats[1]}\n\n"
-        f"📆 *أمس:*\n"
-        f"   - المستخدمين النشطين: {yesterday_stats[0]}\n"
-        f"   - الرسائل: {yesterday_stats[1]}\n\n"
-        "━━━━━━━━━━━━━━━━━━\n"
-        f"💬 *إجمالي الرسائل (كل الوقت):* {total_messages_all_time}\n"
-        "━━━━━━━━━━━━━━━━━━\n\n"
-        "*آخر 5 مستخدمين نشطين:*\n"
+        "📊 *لوحة الإحصائيات*\n\n"
+        f"👥 إجمالي المستخدمين: {total_users}\n"
+        f"🟢 متصل (آخر 24 ساعة): {online_users}\n"
+        f"🔴 غير متصل: {offline_users}\n\n"
+        f"📅 اليوم: {today_stats[0]} نشط | {today_stats[1]} رسالة\n"
+        f"📆 أمس: {yesterday_stats[0]} نشط | {yesterday_stats[1]} رسالة\n\n"
+        f"💬 إجمالي الرسائل: {total_messages_all_time}"
     )
-    
-    for i, user in enumerate(recent_users, 1):
-        username = user[0] or "بدون يوزر"
-        first_name = user[1] or "بدون اسم"
-        stats_message += f"{i}. {first_name} (@{username})\n"
     
     await message.answer(stats_message, parse_mode="Markdown")
 
@@ -618,7 +604,7 @@ async def handle_document(message: types.Message, bot: Bot):
         c = cap.lower()
         if "pdf" in c: target = "pdf"
         elif "word" in c or "docx" in c: target = "docx"
-        elif "excel" in c or "xlsx" in c or "xls" in c: target = "xlsx"
+        elif "excel" in c or "xlsx" in c: target = "xlsx"
         elif "ppt" in c or "pptx" in c: target = "pptx"
     
     if target:
@@ -660,16 +646,15 @@ async def handle_document(message: types.Message, bot: Bot):
                 if not found:
                     await message.reply(
                         "❌ فشل التحويل.\n\n"
-                        "• تأكد أن الملف غير تالف\n"
-                        "• تأكد أن الملف غير محمي بكلمة مرور\n"
-                        "• للملفات الكبيرة جداً، قد يستغرق التحويل وقتاً أطول"
+                        "تأكد من:\n"
+                        "• الملف غير تالف\n"
+                        "• الملف غير محمي بكلمة مرور\n"
+                        "• حجم الملف مناسب"
                     )
             
             if os.path.exists(inpath): os.remove(inpath)
             if os.path.exists(expected_out): os.remove(expected_out)
             
-        except subprocess.TimeoutExpired:
-            await message.reply("⏳ استغرق التحويل وقتاً طويلاً. جرب ملفاً أصغر.")
         except Exception as e:
             logger.error(f"Convert error: {e}")
             await message.reply("❌ حدث خطأ أثناء التحويل.")
@@ -682,16 +667,12 @@ async def handle_document(message: types.Message, bot: Bot):
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "application/vnd.ms-excel",
         "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        "application/vnd.ms-powerpoint",
         "text/csv"
     ]
     if mime not in supported:
         return await message.reply(
-            "⚠️ نوع الملف غير مدعوم للتحليل.\n\n"
-            "🔄 *للتحويل:* أرسل الملف مع تعليق يحدد الصيغة المطلوبة، مثل:\n"
-            "• *حول لـ pdf*\n"
-            "• *حول لـ word*\n"
-            "• *حول لـ excel*",
+            "⚠️ نوع الملف غير مدعوم.\n\n"
+            "🔄 *للتحويل:* اضغط على زر *تحويل ملفات* في القائمة.",
             parse_mode="Markdown"
         )
     
@@ -721,13 +702,9 @@ async def handle_document(message: types.Message, bot: Bot):
             ws = wb.active
             for row in ws.iter_rows(values_only=True):
                 text += " | ".join([str(cell) if cell else "" for cell in row]) + "\n"
-        elif "presentation" in mime or "powerpoint" in mime:
-            text = "[ملف عرض تقديمي - PowerPoint]\n"
-            text += "يمكن للبوت تحويل هذا الملف إلى PDF أو صيغ أخرى.\n"
-            text += "أرسل الملف مع تعليق: *حول لـ pdf*"
         
         if not text.strip():
-            return await message.reply("⚠️ لم أستطع استخراج نص من هذا الملف.")
+            return await message.reply("⚠️ لم أستطع استخراج نص.")
         
         prompt = f"حلل هذا المستند ({fname}). {cap or 'قدم ملخصاً'}\n\n{text[:10000]}"
         resp = await gemini_client.generate(prompt)
@@ -736,7 +713,7 @@ async def handle_document(message: types.Message, bot: Bot):
             
     except Exception as e:
         logger.error(f"Doc error: {e}")
-        await message.reply("عذراً، حدث خطأ أثناء تحليل المستند.")
+        await message.reply("عذراً، حدث خطأ.")
 
 @router.message(F.voice)
 async def handle_voice(message: types.Message, bot: Bot):
@@ -804,11 +781,82 @@ async def handle_voice(message: types.Message, bot: Bot):
         if os.path.exists(ogg_path): os.remove(ogg_path)
         if os.path.exists(wav_path): os.remove(wav_path)
 
+# ==================== خادم الويب للتطبيق المصغر ====================
+
+async def handle_web_chat(request):
+    """استقبال الرسائل النصية من تطبيق الويب المصغر"""
+    try:
+        data = await request.json()
+        user_text = data.get('content', '')
+        
+        if not user_text:
+            return web.json_response({'status': 'error', 'message': 'نص فارغ'})
+        
+        response = await gemini_client.generate(user_text)
+        
+        return web.json_response({
+            'status': 'success',
+            'response': response
+        })
+    except Exception as e:
+        logger.error(f"Web chat error: {e}")
+        return web.json_response({'status': 'error', 'message': 'حدث خطأ'})
+
+async def handle_web_upload(request):
+    """استقبال الملفات من تطبيق الويب المصغر"""
+    try:
+        reader = await request.multipart()
+        field = await reader.next()
+        
+        file_data = await field.read()
+        filename = field.filename
+        
+        # حفظ الملف مؤقتاً
+        temp_path = f"/tmp/web_{filename}"
+        with open(temp_path, 'wb') as f:
+            f.write(file_data)
+        
+        # تحليل الملف
+        with open(temp_path, 'rb') as f:
+            content = f.read()
+        
+        # إرسال إلى Gemini للتحليل
+        prompt = f"حلل هذا الملف ({filename}) وقدم ملخصاً لمحتواه"
+        response = await gemini_client.generate(prompt)
+        
+        os.remove(temp_path)
+        
+        return web.json_response({
+            'status': 'success',
+            'response': response,
+            'filename': filename
+        })
+    except Exception as e:
+        logger.error(f"Web upload error: {e}")
+        return web.json_response({'status': 'error', 'message': 'حدث خطأ أثناء رفع الملف'})
+
+async def init_web_server():
+    """تشغيل خادم الويب"""
+    app = web.Application()
+    app.router.add_post('/api/chat', handle_web_chat)
+    app.router.add_post('/api/upload', handle_web_upload)
+    
+    # خدمة الملفات الثابتة للتطبيق
+    app.router.add_static('/', path='.', name='static')
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', 8000)
+    await site.start()
+    logger.info("Web server started on port 8000")
+
 async def main():
     init_db()
     bot = Bot(token=os.getenv("TELEGRAM_BOT_TOKEN"))
     dp = Dispatcher()
     dp.include_router(router)
+    
+    await init_web_server()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
