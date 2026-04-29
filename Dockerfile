@@ -4,11 +4,10 @@ RUN apt-get update -y && \
     apt-get upgrade -y && \
     apt-get install -y --no-install-recommends \
     ffmpeg \
-    wget \
-    gnupg \
     libreoffice-core \
     libreoffice-writer \
     libreoffice-calc \
+    libreoffice-impress \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
