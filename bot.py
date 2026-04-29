@@ -333,7 +333,7 @@ async def handle_buttons(message: types.Message):
             "💡 بعد أن تستمع للرد، قل لي: *حولي النص دا لملف وورد* أو *حولي النص دا لملف PDF*"
         )
     
-   elif message.text == "👨‍💻 تواصل مع المبرمج":
+    elif message.text == "👨‍💻 تواصل مع المبرمج":
         await message.answer(
             f"👨‍💻 *المبرمج:* {DEVELOPER_NAME}\n\n"
             "📧 *للتواصل:* " + "@omarawaad68",
