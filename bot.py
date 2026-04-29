@@ -172,7 +172,8 @@ def create_excel_file(text: str, filepath: str):
             top=Side(style='thin'), bottom=Side(style='thin')
         )
         
-        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(headers))
+        if headers:
+            ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(headers))
         title_cell = ws['A1']
         title_cell.value = "مستند تم إنشاؤه بواسطة البوت"
         title_cell.font = Font(name='Arial', size=16, bold=True, color='2F5496')
@@ -206,7 +207,8 @@ def create_excel_file(text: str, filepath: str):
             adjusted_width = min(max_length + 4, 50)
             ws.column_dimensions[column_letter].width = adjusted_width
         
-        ws.auto_filter.ref = ws.dimensions
+        if headers:
+            ws.auto_filter.ref = ws.dimensions
     
     else:
         ws['A1'] = "النص المحول"
@@ -616,7 +618,8 @@ async def handle_document(message: types.Message, bot: Bot):
         c = cap.lower()
         if "pdf" in c: target = "pdf"
         elif "word" in c or "docx" in c: target = "docx"
-        elif "excel" in c or "xlsx" in c: target = "xlsx"
+        elif "excel" in c or "xlsx" in c or "xls" in c: target = "xlsx"
+        elif "ppt" in c or "pptx" in c: target = "pptx"
     
     if target:
         await bot.send_chat_action(chat_id=message.chat.id, action="typing")
@@ -627,8 +630,6 @@ async def handle_document(message: types.Message, bot: Bot):
             inpath = f"/tmp/{user_id}_{fname}"
             with open(inpath, 'wb') as f:
                 f.write(file_bytes.read())
-            
-            base_name = os.path.splitext(fname)[0]
             
             result = subprocess.run(
                 ['libreoffice', '--headless', '--convert-to', target,
@@ -659,15 +660,16 @@ async def handle_document(message: types.Message, bot: Bot):
                 if not found:
                     await message.reply(
                         "❌ فشل التحويل.\n\n"
-                        "تأكد من:\n"
-                        "• الملف غير تالف\n"
-                        "• الملف غير محمي بكلمة مرور\n"
-                        "• حجم الملف مناسب"
+                        "• تأكد أن الملف غير تالف\n"
+                        "• تأكد أن الملف غير محمي بكلمة مرور\n"
+                        "• للملفات الكبيرة جداً، قد يستغرق التحويل وقتاً أطول"
                     )
             
             if os.path.exists(inpath): os.remove(inpath)
             if os.path.exists(expected_out): os.remove(expected_out)
             
+        except subprocess.TimeoutExpired:
+            await message.reply("⏳ استغرق التحويل وقتاً طويلاً. جرب ملفاً أصغر.")
         except Exception as e:
             logger.error(f"Convert error: {e}")
             await message.reply("❌ حدث خطأ أثناء التحويل.")
@@ -679,12 +681,17 @@ async def handle_document(message: types.Message, bot: Bot):
         "application/msword",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "application/vnd.ms-powerpoint",
         "text/csv"
     ]
     if mime not in supported:
         return await message.reply(
-            "⚠️ نوع الملف غير مدعوم.\n\n"
-            "🔄 *للتحويل:* اضغط على زر *تحويل ملفات* في القائمة.",
+            "⚠️ نوع الملف غير مدعوم للتحليل.\n\n"
+            "🔄 *للتحويل:* أرسل الملف مع تعليق يحدد الصيغة المطلوبة، مثل:\n"
+            "• *حول لـ pdf*\n"
+            "• *حول لـ word*\n"
+            "• *حول لـ excel*",
             parse_mode="Markdown"
         )
     
@@ -714,9 +721,13 @@ async def handle_document(message: types.Message, bot: Bot):
             ws = wb.active
             for row in ws.iter_rows(values_only=True):
                 text += " | ".join([str(cell) if cell else "" for cell in row]) + "\n"
+        elif "presentation" in mime or "powerpoint" in mime:
+            text = "[ملف عرض تقديمي - PowerPoint]\n"
+            text += "يمكن للبوت تحويل هذا الملف إلى PDF أو صيغ أخرى.\n"
+            text += "أرسل الملف مع تعليق: *حول لـ pdf*"
         
         if not text.strip():
-            return await message.reply("⚠️ لم أستطع استخراج نص.")
+            return await message.reply("⚠️ لم أستطع استخراج نص من هذا الملف.")
         
         prompt = f"حلل هذا المستند ({fname}). {cap or 'قدم ملخصاً'}\n\n{text[:10000]}"
         resp = await gemini_client.generate(prompt)
@@ -725,7 +736,7 @@ async def handle_document(message: types.Message, bot: Bot):
             
     except Exception as e:
         logger.error(f"Doc error: {e}")
-        await message.reply("عذراً، حدث خطأ.")
+        await message.reply("عذراً، حدث خطأ أثناء تحليل المستند.")
 
 @router.message(F.voice)
 async def handle_voice(message: types.Message, bot: Bot):
