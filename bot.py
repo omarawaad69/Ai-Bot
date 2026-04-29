@@ -427,7 +427,7 @@ async def cmd_admin(message: types.Message):
     stats_message = (
         "📊 *لوحة الإحصائيات*\n\n"
         f"👥 إجمالي المستخدمين: {total_users}\n"
-        f"🟢 متصل (آخر 24 ساعة): {online_users}\n"
+        f"🟢 متصل: {online_users}\n"
         f"🔴 غير متصل: {offline_users}\n\n"
         f"📅 اليوم: {today_stats[0]} نشط | {today_stats[1]} رسالة\n"
         f"📆 أمس: {yesterday_stats[0]} نشط | {yesterday_stats[1]} رسالة\n\n"
@@ -783,6 +783,17 @@ async def handle_voice(message: types.Message, bot: Bot):
 
 # ==================== خادم الويب للتطبيق المصغر ====================
 
+async def handle_options(request):
+    """السماح بطلبات CORS"""
+    return web.Response(
+        status=200,
+        headers={
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type',
+        }
+    )
+
 async def handle_web_chat(request):
     """استقبال الرسائل النصية من تطبيق الويب المصغر"""
     try:
@@ -811,16 +822,13 @@ async def handle_web_upload(request):
         file_data = await field.read()
         filename = field.filename
         
-        # حفظ الملف مؤقتاً
         temp_path = f"/tmp/web_{filename}"
         with open(temp_path, 'wb') as f:
             f.write(file_data)
         
-        # تحليل الملف
         with open(temp_path, 'rb') as f:
             content = f.read()
         
-        # إرسال إلى Gemini للتحليل
         prompt = f"حلل هذا الملف ({filename}) وقدم ملخصاً لمحتواه"
         response = await gemini_client.generate(prompt)
         
@@ -838,11 +846,13 @@ async def handle_web_upload(request):
 async def init_web_server():
     """تشغيل خادم الويب"""
     app = web.Application()
+    
+    # دعم CORS
+    app.router.add_route('OPTIONS', '/api/chat', handle_options)
+    app.router.add_route('OPTIONS', '/api/upload', handle_options)
+    
     app.router.add_post('/api/chat', handle_web_chat)
     app.router.add_post('/api/upload', handle_web_upload)
-    
-    # خدمة الملفات الثابتة للتطبيق
-    app.router.add_static('/', path='.', name='static')
     
     runner = web.AppRunner(app)
     await runner.setup()
