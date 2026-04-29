@@ -146,9 +146,91 @@ def create_pdf_file(text: str, filepath: str):
                    check=True, timeout=30)
     os.remove(docx_path)
 
+def create_excel_file(text: str, filepath: str):
+    """تحويل النص إلى ملف Excel منظم"""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+    
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "البيانات"
+    
+    header_font = Font(name='Arial', size=14, bold=True, color='FFFFFF')
+    header_fill = PatternFill(start_color='2F5496', end_color='2F5496', fill_type='solid')
+    header_alignment = Alignment(horizontal='center', vertical='center')
+    cell_font = Font(name='Arial', size=12)
+    cell_alignment = Alignment(horizontal='right', vertical='center')
+    thin_border = Border(
+        left=Side(style='thin'), right=Side(style='thin'),
+        top=Side(style='thin'), bottom=Side(style='thin')
+    )
+    
+    ws.merge_cells('A1:D1')
+    title_cell = ws['A1']
+    title_cell.value = "مستند تم إنشاؤه بواسطة البوت"
+    title_cell.font = header_font
+    title_cell.fill = header_fill
+    title_cell.alignment = header_alignment
+    
+    headers = ['#', 'النص', 'عدد الكلمات', 'عدد الأحرف']
+    for col, header in enumerate(headers, 1):
+        cell = ws.cell(row=2, column=col, value=header)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_alignment
+        cell.border = thin_border
+    
+    lines = text.strip().split('\n')
+    for row_idx, line in enumerate(lines, 3):
+        if line.strip():
+            cell_num = ws.cell(row=row_idx, column=1, value=row_idx - 2)
+            cell_num.font = cell_font
+            cell_num.alignment = Alignment(horizontal='center', vertical='center')
+            cell_num.border = thin_border
+            
+            cell_text = ws.cell(row=row_idx, column=2, value=line.strip())
+            cell_text.font = cell_font
+            cell_text.alignment = cell_alignment
+            cell_text.border = thin_border
+            
+            word_count = len(line.strip().split())
+            cell_words = ws.cell(row=row_idx, column=3, value=word_count)
+            cell_words.font = cell_font
+            cell_words.alignment = Alignment(horizontal='center', vertical='center')
+            cell_words.border = thin_border
+            
+            char_count = len(line.strip())
+            cell_chars = ws.cell(row=row_idx, column=4, value=char_count)
+            cell_chars.font = cell_font
+            cell_chars.alignment = Alignment(horizontal='center', vertical='center')
+            cell_chars.border = thin_border
+    
+    ws.column_dimensions['A'].width = 8
+    ws.column_dimensions['B'].width = 50
+    ws.column_dimensions['C'].width = 15
+    ws.column_dimensions['D'].width = 15
+    
+    wb.save(filepath)
+
 def detect_conversion_intent(text: str):
     text_lower = text.lower()
     
+    # أنماط Excel
+    excel_patterns = [
+        "حولي النص التالي لملف اكسيل", "حولي النص التالي لexcel",
+        "حولي النص دا لملف اكسيل", "حولي النص دا لexcel",
+        "حول النص دا لملف اكسيل", "حول النص دا لexcel",
+        "حولي النص لملف اكسيل", "حولي النص لexcel",
+        "حول النص لملف اكسيل", "حول النص لexcel",
+        "حولي لملف اكسيل", "حول لملف اكسيل",
+        "حولي لexcel", "حول لexcel",
+        "ملف اكسيل", "ملف excel", "اكسيل", "excel", "xlsx",
+        "خليه اكسيل", "خليه excel", "ابعتلي اكسيل",
+        "انزله اكسيل", "حمله اكسيل",
+        "اعملي ملف اكسيل", "اعمل ملف excel",
+    ]
+    
+    # أنماط Word
     word_patterns = [
         "حولي النص التالي لملف وورد", "حولي النص التالي لword",
         "حولي النص دا لملف وورد", "حولي النص دا لword",
@@ -163,6 +245,7 @@ def detect_conversion_intent(text: str):
         "اعملي ملف وورد", "اعمل ملف word",
     ]
     
+    # أنماط PDF
     pdf_patterns = [
         "حولي النص التالي لملف pdf", "حولي النص التالي لpdf",
         "حولي النص دا لملف pdf", "حولي النص دا لpdf",
@@ -175,6 +258,21 @@ def detect_conversion_intent(text: str):
         "ابعتلي pdf", "انزله pdf", "حمله pdf",
         "اعملي ملف pdf", "اعمل ملف بي دي اف",
     ]
+    
+    for pattern in excel_patterns:
+        if pattern in text_lower:
+            idx = text_lower.find(pattern)
+            content = text[idx + len(pattern):].strip()
+            if not content:
+                content = text[:idx].strip()
+                for prefix in ["حولي", "حول", "حوّل", "خلي", "خليك", "اعمل", "سوي", "سوّي", "ابعتلي", "انزلي", "حملي"]:
+                    if content.startswith(prefix):
+                        content = content[len(prefix):].strip()
+                        break
+            if content:
+                return "excel", content
+            else:
+                return "EXCEL_NEED_TEXT", ""
     
     for pattern in word_patterns:
         if pattern in text_lower:
@@ -216,8 +314,8 @@ async def cmd_start(message: types.Message):
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="💬 ابدأ محادثة"), KeyboardButton(text="🖼️ تحليل صورة")],
-            [KeyboardButton(text="📄 تحويل نص لملف"), KeyboardButton(text="🎤 إرسال صوت")],
-            [KeyboardButton(text="👨‍💻 تواصل مع المبرمج")]
+            [KeyboardButton(text="📄 تحويل نص لملف"), KeyboardButton(text="📊 تحويل لإكسيل")],
+            [KeyboardButton(text="🎤 إرسال صوت"), KeyboardButton(text="👨‍💻 تواصل مع المبرمج")]
         ],
         resize_keyboard=True,
         input_field_placeholder="اختر من القائمة..."
@@ -228,7 +326,7 @@ async def cmd_start(message: types.Message):
         "✨ ماذا يمكنني أن أفعل لك؟\n"
         "- الإجابة عن أي سؤال\n"
         "- كتابة وشرح الأكواد البرمجية\n"
-        "- تحويل النصوص إلى ملفات Word أو PDF\n"
+        "- تحويل النصوص إلى ملفات Word أو PDF أو Excel\n"
         "- تحليل الصور والمستندات\n"
         "- الاستماع إلى الرسائل الصوتية\n"
         "- تصميم برومبت احترافي للصور\n\n"
@@ -307,7 +405,7 @@ async def cmd_reset(message: types.Message):
     await message.answer("🔄 تم مسح سياق المحادثة.")
 
 # ==================== معالج الأزرار التفاعلية ====================
-@router.message(F.text.in_({"💬 ابدأ محادثة", "🖼️ تحليل صورة", "📄 تحويل نص لملف", "🎤 إرسال صوت", "👨‍💻 تواصل مع المبرمج"}))
+@router.message(F.text.in_({"💬 ابدأ محادثة", "🖼️ تحليل صورة", "📄 تحويل نص لملف", "📊 تحويل لإكسيل", "🎤 إرسال صوت", "👨‍💻 تواصل مع المبرمج"}))
 async def handle_buttons(message: types.Message):
     update_user_activity(message.from_user)
     
@@ -320,7 +418,16 @@ async def handle_buttons(message: types.Message):
     elif message.text == "📄 تحويل نص لملف":
         await message.answer(
             "📄 أرسل لي النص الذي تريد تحويله.\n\n"
-            "مثال: *حولي النص دا لملف وورد: هذا محضر الاجتماع*",
+            "• *وورد:* حولي النص دا لملف وورد: ...\n"
+            "• *PDF:* حولي النص دا لملف PDF: ...\n"
+            "• *اكسيل:* حولي النص دا لملف اكسيل: ...",
+            parse_mode="Markdown"
+        )
+    
+    elif message.text == "📊 تحويل لإكسيل":
+        await message.answer(
+            "📊 أرسل لي النص الذي تريد تحويله إلى ملف Excel.\n\n"
+            "مثال: *حولي النص دا لملف اكسيل: اسم,عمر,مدينة*",
             parse_mode="Markdown"
         )
     
@@ -329,7 +436,7 @@ async def handle_buttons(message: types.Message):
             "🎤 أرسل لي رسالة صوتية وسأقوم بما يلي:\n\n"
             "1️⃣ تحويلها إلى نص مكتوب\n"
             "2️⃣ الرد على محتواها\n"
-            "3️⃣ يمكنك أيضاً طلب إنشاء ملف Word أو PDF من النص المستخرج\n\n"
+            "3️⃣ يمكنك أيضاً طلب إنشاء ملف Word أو PDF أو Excel من النص المستخرج\n\n"
             "💡 بعد أن تستمع للرد، قل لي: *حولي النص دا لملف وورد* أو *حولي النص دا لملف PDF*"
         )
     
@@ -338,7 +445,7 @@ async def handle_buttons(message: types.Message):
             f"👨‍💻 *المبرمج:* {DEVELOPER_NAME}\n\n"
             "📧 *للتواصل:* ابحث عن omarawaad68 في تيليجرام.",
             parse_mode="Markdown"
-       )
+        )
 
 # ==================== معالج النصوص ====================
 @router.message(F.text)
@@ -347,15 +454,29 @@ async def handle_message(message: types.Message):
     user_text = message.text
     text_lower = user_text.lower()
 
-    if user_text in ["💬 ابدأ محادثة", "🖼️ تحليل صورة", "📄 تحويل نص لملف", "🎤 إرسال صوت", "👨‍💻 تواصل مع المبرمج"]:
+    if user_text in ["💬 ابدأ محادثة", "🖼️ تحليل صورة", "📄 تحويل نص لملف", "📊 تحويل لإكسيل", "🎤 إرسال صوت", "👨‍💻 تواصل مع المبرمج"]:
         return
 
     intent, content = detect_conversion_intent(user_text)
     
+    if intent == "EXCEL_NEED_TEXT":
+        return await message.reply("📊 ما هو النص الذي تريد تحويله إلى ملف Excel؟")
     if intent == "WORD_NEED_TEXT":
         return await message.reply("📝 ما هو النص الذي تريد تحويله إلى ملف Word؟")
     if intent == "PDF_NEED_TEXT":
         return await message.reply("📕 ما هو النص الذي تريد تحويله إلى ملف PDF؟")
+    
+    if intent == "excel" and content:
+        await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+        try:
+            path = f"/tmp/{message.from_user.id}_doc.xlsx"
+            create_excel_file(content, path)
+            await message.reply_document(FSInputFile(path), caption="📊 ملف Excel جاهز!")
+            os.remove(path)
+            return
+        except Exception as e:
+            logger.error(f"Excel error: {e}")
+            return await message.reply("❌ حدث خطأ في إنشاء ملف Excel.")
     
     if intent == "docx" and content:
         await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
