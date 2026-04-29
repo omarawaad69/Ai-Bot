@@ -152,19 +152,11 @@ def detect_conversion_intent(text: str):
     word_patterns = [
         "حولي النص التالي لملف وورد", "حولي النص التالي لword",
         "حولي النص دا لملف وورد", "حولي النص دا لword",
-        "حولي النص ده لملف وورد", "حولي النص ده لword",
-        "حولي دا لملف وورد", "حولي دا لword",
-        "حولي ده لملف وورد", "حولي ده لword",
-        "حول النص التالي لملف وورد", "حول النص التالي لword",
         "حول النص دا لملف وورد", "حول النص دا لword",
-        "حول النص ده لملف وورد", "حول النص ده لword",
-        "حول دا لملف وورد", "حول دا لword",
-        "حول ده لملف وورد", "حول ده لword",
         "حولي النص لملف وورد", "حولي النص لword",
         "حول النص لملف وورد", "حول النص لword",
         "حولي لملف وورد", "حول لملف وورد",
         "حولي لوورد", "حول لوورد",
-        "حولي لword", "حول لword",
         "ملف وورد", "ملف word", "وورد", "word", "docx",
         "خليه وورد", "خليه word", "ابعتلي وورد",
         "انزله وورد", "حمله وورد",
@@ -174,18 +166,10 @@ def detect_conversion_intent(text: str):
     pdf_patterns = [
         "حولي النص التالي لملف pdf", "حولي النص التالي لpdf",
         "حولي النص دا لملف pdf", "حولي النص دا لpdf",
-        "حولي النص ده لملف pdf", "حولي النص ده لpdf",
-        "حولي دا لملف pdf", "حولي دا لpdf",
-        "حولي ده لملف pdf", "حولي ده لpdf",
-        "حول النص التالي لملف pdf", "حول النص التالي لpdf",
         "حول النص دا لملف pdf", "حول النص دا لpdf",
-        "حول النص ده لملف pdf", "حول النص ده لpdf",
-        "حول دا لملف pdf", "حول دا لpdf",
-        "حول ده لملف pdf", "حول ده لpdf",
         "حولي النص لpdf", "حول النص لpdf",
         "حولي لملف pdf", "حول لملف pdf",
         "حولي لpdf", "حول لpdf",
-        "حولي لبي دي اف", "حول لبي دي اف",
         "ملف pdf", "بي دي اف", "pdf",
         "خليه pdf", "خليه بي دي اف",
         "ابعتلي pdf", "انزله pdf", "حمله pdf",
@@ -229,7 +213,6 @@ def detect_conversion_intent(text: str):
 async def cmd_start(message: types.Message):
     update_user_activity(message.from_user)
     
-    # إنشاء لوحة الأزرار التفاعلية
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="💬 ابدأ محادثة"), KeyboardButton(text="🖼️ تحليل صورة")],
@@ -345,11 +328,11 @@ async def handle_buttons(message: types.Message):
         await message.answer("🎤 أرسل لي رسالة صوتية وسأقوم بتحويلها إلى نص والرد عليك.")
     
     elif message.text == "👨‍💻 تواصل مع المبرمج":
-    await message.answer(
-        f"👨‍💻 *المبرمج:* {DEVELOPER_NAME}\n\n"
-        f"📧 *للاتصال:* @omarawaad68",
-        parse_mode="Markdown"
-    )
+        await message.answer(
+            f"👨‍💻 *المبرمج:* {DEVELOPER_NAME}\n\n"
+            f"📧 *للاتصال:* @omarawaad68",
+            parse_mode="Markdown"
+        )
 
 # ==================== معالج النصوص ====================
 @router.message(F.text)
@@ -357,6 +340,10 @@ async def handle_message(message: types.Message):
     update_user_activity(message.from_user)
     user_text = message.text
     text_lower = user_text.lower()
+
+    # تجنب معالجة أزرار القائمة
+    if user_text in ["💬 ابدأ محادثة", "🖼️ تحليل صورة", "📄 تحويل نص لملف", "🎤 إرسال صوت", "👨‍💻 تواصل مع المبرمج"]:
+        return
 
     intent, content = detect_conversion_intent(user_text)
     
