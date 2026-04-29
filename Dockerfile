@@ -8,6 +8,7 @@ RUN apt-get update -y && \
     gnupg \
     libreoffice-core \
     libreoffice-writer \
+    libreoffice-calc \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
