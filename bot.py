@@ -11,7 +11,7 @@ from PIL import Image
 
 from aiogram import Bot, Dispatcher, Router, types, F
 from aiogram.filters import Command
-from aiogram.types import FSInputFile
+from aiogram.types import FSInputFile, ReplyKeyboardMarkup, KeyboardButton
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types as genai_types
@@ -228,6 +228,18 @@ def detect_conversion_intent(text: str):
 @router.message(Command("start"))
 async def cmd_start(message: types.Message):
     update_user_activity(message.from_user)
+    
+    # إنشاء لوحة الأزرار التفاعلية
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="💬 ابدأ محادثة"), KeyboardButton(text="🖼️ تحليل صورة")],
+            [KeyboardButton(text="📄 تحويل نص لملف"), KeyboardButton(text="🎤 إرسال صوت")],
+            [KeyboardButton(text="👨‍💻 تواصل مع المبرمج")]
+        ],
+        resize_keyboard=True,
+        input_field_placeholder="اختر من القائمة..."
+    )
+    
     await message.answer(
         "🎉 أهلاً بك! أنا مستشار الذكاء الاصطناعي الخارق.\n\n"
         "✨ ماذا يمكنني أن أفعل لك؟\n"
@@ -240,7 +252,8 @@ async def cmd_start(message: types.Message):
         "💬 تحدث معي طبيعياً وسأفهمك!\n\n"
         "━━━━━━━━━━━━━━━━━━\n"
         f"👨‍💻 المبرمج: {DEVELOPER_NAME}\n"
-        "━━━━━━━━━━━━━━━━━━"
+        "━━━━━━━━━━━━━━━━━━",
+        reply_markup=keyboard
     )
 
 @router.message(Command("admin"))
@@ -309,6 +322,34 @@ async def cmd_admin(message: types.Message):
 async def cmd_reset(message: types.Message):
     update_user_activity(message.from_user)
     await message.answer("🔄 تم مسح سياق المحادثة.")
+
+# ==================== معالج الأزرار التفاعلية ====================
+@router.message(F.text.in_({"💬 ابدأ محادثة", "🖼️ تحليل صورة", "📄 تحويل نص لملف", "🎤 إرسال صوت", "👨‍💻 تواصل مع المبرمج"}))
+async def handle_buttons(message: types.Message):
+    update_user_activity(message.from_user)
+    
+    if message.text == "💬 ابدأ محادثة":
+        await message.answer("📝 أنا جاهز! أرسل سؤالك أو طلبك وسأجيبك فوراً.")
+    
+    elif message.text == "🖼️ تحليل صورة":
+        await message.answer("🖼️ أرسل لي الصورة التي تريد تحليلها.")
+    
+    elif message.text == "📄 تحويل نص لملف":
+        await message.answer(
+            "📄 أرسل لي النص الذي تريد تحويله.\n\n"
+            "مثال: *حولي النص دا لملف وورد: هذا محضر الاجتماع*",
+            parse_mode="Markdown"
+        )
+    
+    elif message.text == "🎤 إرسال صوت":
+        await message.answer("🎤 أرسل لي رسالة صوتية وسأقوم بتحويلها إلى نص والرد عليك.")
+    
+    elif message.text == "👨‍💻 تواصل مع المبرمج":
+        await message.answer(
+            f"👨‍💻 *المبرمج:* {DEVELOPER_NAME}\n\n"
+            "📧 للتواصل، ابحث عن الحساب في تيليجرام.",
+            parse_mode="Markdown"
+        )
 
 # ==================== معالج النصوص ====================
 @router.message(F.text)
