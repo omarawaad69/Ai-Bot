@@ -76,7 +76,6 @@ def update_user_activity(user: types.User):
     except Exception as e:
         logger.error(f"User activity error: {e}")
 
-# ==================== عميل Gemini مع ذاكرة المحادثة ====================
 class AsyncGeminiClient:
     def __init__(self, model: str = "gemini-3.1-flash-lite-preview"):
         self.client = genai.Client()
@@ -397,8 +396,8 @@ async def cmd_start(message: types.Message):
         keyboard=[
             [KeyboardButton(text="💬 ابدأ محادثة"), KeyboardButton(text="🖼️ تحليل صورة")],
             [KeyboardButton(text="📄 تحويل نص لملف"), KeyboardButton(text="📊 تحويل لإكسيل")],
-            [KeyboardButton(text="🎤 إرسال صوت"), KeyboardButton(text="👨‍💻 تواصل مع المبرمج")],
-            [KeyboardButton(text="🔄 تحويل ملفات")]
+            [KeyboardButton(text="🎤 إرسال صوت"), KeyboardButton(text="🌐 ترجمة فورية")],
+            [KeyboardButton(text="🔄 تحويل ملفات"), KeyboardButton(text="👨‍💻 تواصل مع المبرمج")]
         ],
         resize_keyboard=True,
         input_field_placeholder="اختر من القائمة..."
@@ -413,7 +412,8 @@ async def cmd_start(message: types.Message):
         "- تحويل الملفات بين الصيغ\n"
         "- تحليل الصور والمستندات\n"
         "- الاستماع إلى الرسائل الصوتية\n"
-        "- تصميم برومبت احترافي للصور\n\n"
+        "- تصميم برومبت احترافي للصور\n"
+        "- الترجمة الفورية لأي لغة\n\n"
         "💬 تحدث معي طبيعياً وسأفهمك!\n\n"
         "━━━━━━━━━━━━━━━━━━\n"
         f"👨‍💻 المبرمج: {DEVELOPER_NAME}\n"
@@ -476,7 +476,25 @@ async def cmd_reset(message: types.Message):
     gemini_client.conversations.pop(str(message.from_user.id), None)
     await message.answer("🔄 تم مسح سياق المحادثة.")
 
-@router.message(F.text.in_({"💬 ابدأ محادثة", "🖼️ تحليل صورة", "📄 تحويل نص لملف", "📊 تحويل لإكسيل", "🎤 إرسال صوت", "👨‍💻 تواصل مع المبرمج", "🔄 تحويل ملفات"}))
+@router.message(Command("translate"))
+async def cmd_translate(message: types.Message):
+    update_user_activity(message.from_user)
+    await message.answer(
+        "🌐 *الترجمة الفورية*\n\n"
+        "يمكنك الترجمة بطريقتين:\n\n"
+        "1️⃣ *أرسل النص بهذا الشكل:*\n"
+        "`ترجم إلى الفرنسية: مرحباً، كيف حالك؟`\n\n"
+        "2️⃣ *أرسل رسالة صوتية:*\n"
+        "سأحولها إلى نص ثم أترجمها لك.\n"
+        "يمكنك تحديد اللغة في نفس الرسالة الصوتية.\n\n"
+        "📝 *مثال للأوامر:*\n"
+        "- ترجم إلى الإنجليزية: النص\n"
+        "- ترجم إلى الإسبانية: النص\n"
+        "- ترجم إلى الألمانية: النص",
+        parse_mode="Markdown"
+    )
+
+@router.message(F.text.in_({"💬 ابدأ محادثة", "🖼️ تحليل صورة", "📄 تحويل نص لملف", "📊 تحويل لإكسيل", "🎤 إرسال صوت", "👨‍💻 تواصل مع المبرمج", "🔄 تحويل ملفات", "🌐 ترجمة فورية"}))
 async def handle_buttons(message: types.Message):
     update_user_activity(message.from_user)
     
@@ -517,6 +535,21 @@ async def handle_buttons(message: types.Message):
             parse_mode="Markdown",
             reply_markup=get_conversion_keyboard()
         )
+    elif message.text == "🌐 ترجمة فورية":
+        await message.answer(
+            "🌐 *الترجمة الفورية*\n\n"
+            "يمكنك الترجمة بطريقتين:\n\n"
+            "1️⃣ *أرسل النص بهذا الشكل:*\n"
+            "`ترجم إلى الفرنسية: مرحباً، كيف حالك؟`\n\n"
+            "2️⃣ *أرسل رسالة صوتية:*\n"
+            "سأحولها إلى نص ثم أترجمها لك.\n"
+            "يمكنك تحديد اللغة في نفس الرسالة الصوتية.\n\n"
+            "📝 *مثال للأوامر:*\n"
+            "- ترجم إلى الإنجليزية: النص\n"
+            "- ترجم إلى الإسبانية: النص\n"
+            "- ترجم إلى الألمانية: النص",
+            parse_mode="Markdown"
+        )
 
 @router.message(F.text)
 async def handle_message(message: types.Message):
@@ -524,7 +557,7 @@ async def handle_message(message: types.Message):
     user_text = message.text
     text_lower = user_text.lower()
 
-    if user_text in ["💬 ابدأ محادثة", "🖼️ تحليل صورة", "📄 تحويل نص لملف", "📊 تحويل لإكسيل", "🎤 إرسال صوت", "👨‍💻 تواصل مع المبرمج", "🔄 تحويل ملفات"]:
+    if user_text in ["💬 ابدأ محادثة", "🖼️ تحليل صورة", "📄 تحويل نص لملف", "📊 تحويل لإكسيل", "🎤 إرسال صوت", "👨‍💻 تواصل مع المبرمج", "🔄 تحويل ملفات", "🌐 ترجمة فورية"]:
         return
 
     intent, content = detect_conversion_intent(user_text)
@@ -588,6 +621,39 @@ async def handle_message(message: types.Message):
         final_response = f"🎨 *تم تصميم برومبت احترافي لطلبك:*\n\n`{generated_prompt}`\n\n🖼️ يمكنك نسخ هذا النص ولصقه في أي أداة لتوليد الصور بالذكاء الاصطناعي."
         await message.reply(final_response, parse_mode="Markdown")
         return
+
+    # ==================== الترجمة الفورية ====================
+    translate_triggers = ["ترجم إلى", "ترجم الى", "ترجم لـ", "ترجمة إلى", "ترجمة لـ", "translate to"]
+    is_translate_request = any(trigger in text_lower for trigger in translate_triggers)
+
+    if is_translate_request:
+        target_lang = None
+        text_to_translate = None
+        
+        for trigger in translate_triggers:
+            if trigger in text_lower:
+                idx = text_lower.find(trigger)
+                rest = user_text[idx + len(trigger):].strip()
+                
+                if ':' in rest:
+                    target_lang, text_to_translate = rest.split(':', 1)
+                    target_lang = target_lang.strip()
+                    text_to_translate = text_to_translate.strip()
+                else:
+                    target_lang = rest.strip()
+                break
+        
+        if target_lang and text_to_translate:
+            await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+            
+            prompt = f"ترجم النص التالي إلى {target_lang}. أرسل الترجمة فقط بدون أي كلام إضافي:\n\n{text_to_translate}"
+            translation = await gemini_client.generate(prompt, str(message.from_user.id))
+            
+            await message.answer(f"🌐 *الترجمة إلى {target_lang}:*\n\n{translation}", parse_mode="Markdown")
+            return
+        elif target_lang:
+            await message.reply(f"🌐 *من فضلك أرسل النص الذي تريد ترجمته إلى {target_lang}.*\n\nمثال: *ترجم إلى {target_lang}: النص هنا*", parse_mode="Markdown")
+            return
 
     await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
     resp = await gemini_client.generate(user_text, str(message.from_user.id))
@@ -799,8 +865,6 @@ async def handle_voice(message: types.Message, bot: Bot):
     finally:
         if os.path.exists(ogg_path): os.remove(ogg_path)
         if os.path.exists(wav_path): os.remove(wav_path)
-
-# ==================== خادم الويب ====================
 
 async def handle_web_chat(request):
     try:
