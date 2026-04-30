@@ -30,6 +30,7 @@ ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "7361263893"))
 DEVELOPER_NAME = "Omar Abd El Gawaad"
 
 user_conversion_choice = {}
+user_translate_state = {}
 
 SYSTEM_PROMPT = """
 أنت "مستشار الذكاء الاصطناعي الخارق". أنت تجمع بين خبير موسوعي ومبرمج عبقري. هدفك تقديم إجابات دقيقة واحترافية في كل المجالات، مع قدرة استثنائية على البرمجة.
@@ -412,8 +413,8 @@ async def cmd_start(message: types.Message):
         "- تحويل الملفات بين الصيغ\n"
         "- تحليل الصور والمستندات\n"
         "- الاستماع إلى الرسائل الصوتية\n"
-        "- تصميم برومبت احترافي للصور\n"
-        "- الترجمة الفورية لأي لغة\n\n"
+        "- الترجمة الفورية لأي لغة\n"
+        "- تصميم برومبت احترافي للصور\n\n"
         "💬 تحدث معي طبيعياً وسأفهمك!\n\n"
         "━━━━━━━━━━━━━━━━━━\n"
         f"👨‍💻 المبرمج: {DEVELOPER_NAME}\n"
@@ -472,7 +473,6 @@ async def cmd_admin(message: types.Message):
 @router.message(Command("reset"))
 async def cmd_reset(message: types.Message):
     update_user_activity(message.from_user)
-    # مسح ذاكرة المحادثة للمستخدم
     gemini_client.conversations.pop(str(message.from_user.id), None)
     await message.answer("🔄 تم مسح سياق المحادثة.")
 
@@ -853,9 +853,19 @@ async def handle_voice(message: types.Message, bot: Bot):
             return
         
         await message.reply(f"🎤 *لقد فهمت:* _{text}_", parse_mode="Markdown")
-        resp = await gemini_client.generate(text, str(message.from_user.id))
-        for i in range(0, len(resp), 4000):
-            await message.answer(resp[i:i+4000])
+        
+        # التحقق مما إذا كان المستخدم قد حدد لغة للترجمة
+        user_id = str(message.from_user.id)
+        if user_id in user_translate_state:
+            target_lang = user_translate_state[user_id]
+            await message.reply(f"🌐 *جاري الترجمة إلى {target_lang}...*", parse_mode="Markdown")
+            prompt = f"ترجم النص التالي إلى {target_lang}. أرسل الترجمة فقط بدون أي كلام إضافي:\n\n{text}"
+            translation = await gemini_client.generate(prompt, user_id)
+            await message.answer(f"🌐 *الترجمة إلى {target_lang}:*\n\n{translation}", parse_mode="Markdown")
+        else:
+            resp = await gemini_client.generate(text, user_id)
+            for i in range(0, len(resp), 4000):
+                await message.answer(resp[i:i+4000])
             
     except ImportError:
         await message.reply("⚠️ مكتبة الصوت غير مثبتة.")
