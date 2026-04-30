@@ -76,26 +76,85 @@ def update_user_activity(user: types.User):
     except Exception as e:
         logger.error(f"User activity error: {e}")
 
+# ==================== عميل Gemini مع ذاكرة المحادثة ====================
 class AsyncGeminiClient:
     def __init__(self, model: str = "gemini-3.1-flash-lite-preview"):
         self.client = genai.Client()
         self.model = model
+        self.conversations = {}
 
-    async def generate(self, prompt: str) -> str:
+    async def generate(self, prompt: str, user_id: str = "default") -> str:
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self._sync_generate, prompt)
+        return await loop.run_in_executor(None, self._sync_generate, prompt, user_id)
 
-    def _sync_generate(self, prompt: str) -> str:
+    def _sync_generate(self, prompt: str, user_id: str = "default") -> str:
+        if user_id not in self.conversations:
+            self.conversations[user_id] = []
+        
+        if len(self.conversations[user_id]) >= 2:
+            is_new_topic = self._detect_topic_change(prompt, self.conversations[user_id])
+            if is_new_topic:
+                self.conversations[user_id] = self.conversations[user_id][-2:]
+        
+        self.conversations[user_id].append({
+            "role": "user",
+            "parts": [{"text": prompt}]
+        })
+        
+        if len(self.conversations[user_id]) > 15:
+            self.conversations[user_id] = self.conversations[user_id][-15:]
+        
+        full_context = [
+            {"role": "user", "parts": [{"text": "أنت مستشار ذكي. تذكر محادثتنا. إذا تغير الموضوع، ابدأ بداية جديدة."}]},
+            {"role": "model", "parts": [{"text": "حسناً، سأتذكر محادثتنا."}]},
+            *self.conversations[user_id]
+        ]
+        
         for attempt in range(3):
             try:
                 response = self.client.models.generate_content(
-                    model=self.model, contents=prompt,
+                    model=self.model,
+                    contents=full_context,
                     config=genai_types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT))
-                return response.text
+                
+                reply = response.text
+                
+                self.conversations[user_id].append({
+                    "role": "model",
+                    "parts": [{"text": reply}]
+                })
+                
+                return reply
             except Exception as e:
                 logger.error(f"Gemini error (attempt {attempt+1}): {e}")
-                if attempt < 2: time.sleep(1)
-                else: return "عذراً، حدث خطأ مؤقت."
+                if attempt < 2:
+                    time.sleep(1)
+                else:
+                    return "عذراً، حدث خطأ مؤقت."
+    
+    def _detect_topic_change(self, new_message: str, history: list) -> bool:
+        if len(history) < 2:
+            return False
+        
+        last_messages = " ".join([
+            m.get("parts", [{}])[0].get("text", "") 
+            for m in history[-4:]
+        ])
+        
+        try:
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=[{
+                    "parts": [{
+                        "text": f"هل هذا السؤال مرتبط بنفس موضوع المحادثة السابقة؟ أجب بـ 'نعم' أو 'لا' فقط.\n\nالسابقة: {last_messages}\n\nالجديد: {new_message}"
+                    }]
+                }]
+            )
+            
+            answer = response.text.strip()
+            return "لا" in answer
+        except:
+            return False
 
     async def generate_with_media(self, prompt: str, media_parts: list) -> str:
         loop = asyncio.get_event_loop()
@@ -223,40 +282,20 @@ def detect_conversion_intent(text: str):
     text_lower = text.lower()
     
     excel_patterns = [
-        "حولي النص التالي لملف اكسيل", "حولي النص التالي لexcel",
-        "حولي النص دا لملف اكسيل", "حولي النص دا لexcel",
-        "حول النص دا لملف اكسيل", "حول النص دا لexcel",
-        "حولي النص لملف اكسيل", "حولي النص لexcel",
-        "حول النص لملف اكسيل", "حول النص لexcel",
-        "حولي لملف اكسيل", "حول لملف اكسيل",
+        "حولي النص التالي لملف اكسيل", "حولي لملف اكسيل", "حول لملف اكسيل",
         "ملف اكسيل", "ملف excel", "اكسيل", "excel", "xlsx",
-        "خليه اكسيل", "خليه excel", "ابعتلي اكسيل",
-        "انزله اكسيل", "حمله اكسيل",
         "اعملي ملف اكسيل", "اعمل ملف excel",
     ]
     
     word_patterns = [
-        "حولي النص التالي لملف وورد", "حولي النص التالي لword",
-        "حولي النص دا لملف وورد", "حولي النص دا لword",
-        "حول النص دا لملف وورد", "حول النص دا لword",
-        "حولي النص لملف وورد", "حولي النص لword",
-        "حول النص لملف وورد", "حول النص لword",
-        "حولي لملف وورد", "حول لملف وورد",
+        "حولي النص التالي لملف وورد", "حولي لملف وورد", "حول لملف وورد",
         "ملف وورد", "ملف word", "وورد", "word", "docx",
-        "خليه وورد", "خليه word", "ابعتلي وورد",
-        "انزله وورد", "حمله وورد",
         "اعملي ملف وورد", "اعمل ملف word",
     ]
     
     pdf_patterns = [
-        "حولي النص التالي لملف pdf", "حولي النص التالي لpdf",
-        "حولي النص دا لملف pdf", "حولي النص دا لpdf",
-        "حول النص دا لملف pdf", "حول النص دا لpdf",
-        "حولي النص لpdf", "حول النص لpdf",
-        "حولي لملف pdf", "حول لملف pdf",
+        "حولي النص التالي لملف pdf", "حولي لملف pdf", "حول لملف pdf",
         "ملف pdf", "بي دي اف", "pdf",
-        "خليه pdf", "خليه بي دي اف",
-        "ابعتلي pdf", "انزله pdf", "حمله pdf",
         "اعملي ملف pdf", "اعمل ملف بي دي اف",
     ]
     
@@ -266,14 +305,12 @@ def detect_conversion_intent(text: str):
             content = text[idx + len(pattern):].strip()
             if not content:
                 content = text[:idx].strip()
-                for prefix in ["حولي", "حول", "حوّل", "خلي", "خليك", "اعمل", "سوي", "سوّي", "ابعتلي", "انزلي", "حملي"]:
+                for prefix in ["حولي", "حول", "حوّل", "خلي", "اعمل", "سوي", "ابعتلي", "انزلي", "حملي"]:
                     if content.startswith(prefix):
                         content = content[len(prefix):].strip()
                         break
-            if content:
-                return "excel", content
-            else:
-                return "EXCEL_NEED_TEXT", ""
+            if content: return "excel", content
+            else: return "EXCEL_NEED_TEXT", ""
     
     for pattern in word_patterns:
         if pattern in text_lower:
@@ -281,14 +318,12 @@ def detect_conversion_intent(text: str):
             content = text[idx + len(pattern):].strip()
             if not content:
                 content = text[:idx].strip()
-                for prefix in ["حولي", "حول", "حوّل", "خلي", "خليك", "اعمل", "سوي", "سوّي", "ابعتلي", "انزلي", "حملي"]:
+                for prefix in ["حولي", "حول", "حوّل", "خلي", "اعمل", "سوي", "ابعتلي", "انزلي", "حملي"]:
                     if content.startswith(prefix):
                         content = content[len(prefix):].strip()
                         break
-            if content:
-                return "docx", content
-            else:
-                return "WORD_NEED_TEXT", ""
+            if content: return "docx", content
+            else: return "WORD_NEED_TEXT", ""
     
     for pattern in pdf_patterns:
         if pattern in text_lower:
@@ -296,14 +331,12 @@ def detect_conversion_intent(text: str):
             content = text[idx + len(pattern):].strip()
             if not content:
                 content = text[:idx].strip()
-                for prefix in ["حولي", "حول", "حوّل", "خلي", "خليك", "اعمل", "سوي", "سوّي", "ابعتلي", "انزلي", "حملي"]:
+                for prefix in ["حولي", "حول", "حوّل", "خلي", "اعمل", "سوي", "ابعتلي", "انزلي", "حملي"]:
                     if content.startswith(prefix):
                         content = content[len(prefix):].strip()
                         break
-            if content:
-                return "pdf", content
-            else:
-                return "PDF_NEED_TEXT", ""
+            if content: return "pdf", content
+            else: return "PDF_NEED_TEXT", ""
     
     return None, None
 
@@ -439,6 +472,8 @@ async def cmd_admin(message: types.Message):
 @router.message(Command("reset"))
 async def cmd_reset(message: types.Message):
     update_user_activity(message.from_user)
+    # مسح ذاكرة المحادثة للمستخدم
+    gemini_client.conversations.pop(str(message.from_user.id), None)
     await message.answer("🔄 تم مسح سياق المحادثة.")
 
 @router.message(F.text.in_({"💬 ابدأ محادثة", "🖼️ تحليل صورة", "📄 تحويل نص لملف", "📊 تحويل لإكسيل", "🎤 إرسال صوت", "👨‍💻 تواصل مع المبرمج", "🔄 تحويل ملفات"}))
@@ -537,16 +572,10 @@ async def handle_message(message: types.Message):
             logger.error(f"PDF error: {e}")
             return await message.reply("❌ حدث خطأ في إنشاء ملف PDF.")
 
-    image_keywords = ["اعملي صورة", "اعمل صورة", "ارسم", "صمملي", "تخيل", "صورلي", "توليد صورة", "انشاء صورة", "صمم صورة", "generate image", "create image"]
+    image_keywords = ["اعملي صورة", "اعمل صورة", "ارسم", "صمملي", "تخيل", "صورلي", "توليد صورة", "انشاء صورة", "صمم صورة"]
     is_image_request = any(keyword in text_lower for keyword in image_keywords)
 
     if is_image_request:
-        image_prompt = user_text
-        for keyword in image_keywords:
-            if keyword in text_lower:
-                image_prompt = user_text[text_lower.find(keyword) + len(keyword):].strip().lstrip(":، ")
-                break
-        
         await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
         prompt_request = f"""حوّل الطلب التالي إلى أمر (Prompt) إبداعي واحترافي باللغة العربية لاستخدامه مع مولدات الصور بالذكاء الاصطناعي. أضف تفاصيل عن الإضاءة، الألوان، الزاوية، والجو العام.
         
@@ -554,14 +583,14 @@ async def handle_message(message: types.Message):
         
         اكتب فقط نص الأمر (البرومبت) بدون أي مقدمات أو شرح إضافي."""
         
-        generated_prompt = await gemini_client.generate(prompt_request)
+        generated_prompt = await gemini_client.generate(prompt_request, str(message.from_user.id))
         
         final_response = f"🎨 *تم تصميم برومبت احترافي لطلبك:*\n\n`{generated_prompt}`\n\n🖼️ يمكنك نسخ هذا النص ولصقه في أي أداة لتوليد الصور بالذكاء الاصطناعي."
         await message.reply(final_response, parse_mode="Markdown")
         return
 
     await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
-    resp = await gemini_client.generate(user_text)
+    resp = await gemini_client.generate(user_text, str(message.from_user.id))
     for i in range(0, len(resp), 4000):
         await message.answer(resp[i:i+4000])
 
@@ -644,13 +673,7 @@ async def handle_document(message: types.Message, bot: Bot):
                         break
                 
                 if not found:
-                    await message.reply(
-                        "❌ فشل التحويل.\n\n"
-                        "تأكد من:\n"
-                        "• الملف غير تالف\n"
-                        "• الملف غير محمي بكلمة مرور\n"
-                        "• حجم الملف مناسب"
-                    )
+                    await message.reply("❌ فشل التحويل.")
             
             if os.path.exists(inpath): os.remove(inpath)
             if os.path.exists(expected_out): os.remove(expected_out)
@@ -670,11 +693,7 @@ async def handle_document(message: types.Message, bot: Bot):
         "text/csv"
     ]
     if mime not in supported:
-        return await message.reply(
-            "⚠️ نوع الملف غير مدعوم.\n\n"
-            "🔄 *للتحويل:* اضغط على زر *تحويل ملفات* في القائمة.",
-            parse_mode="Markdown"
-        )
+        return await message.reply("⚠️ نوع الملف غير مدعوم.")
     
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     try:
@@ -707,7 +726,7 @@ async def handle_document(message: types.Message, bot: Bot):
             return await message.reply("⚠️ لم أستطع استخراج نص.")
         
         prompt = f"حلل هذا المستند ({fname}). {cap or 'قدم ملخصاً'}\n\n{text[:10000]}"
-        resp = await gemini_client.generate(prompt)
+        resp = await gemini_client.generate(prompt, str(user_id))
         for i in range(0, len(resp), 4000):
             await message.reply(resp[i:i+4000])
             
@@ -768,7 +787,7 @@ async def handle_voice(message: types.Message, bot: Bot):
             return
         
         await message.reply(f"🎤 *لقد فهمت:* _{text}_", parse_mode="Markdown")
-        resp = await gemini_client.generate(text)
+        resp = await gemini_client.generate(text, str(message.from_user.id))
         for i in range(0, len(resp), 4000):
             await message.answer(resp[i:i+4000])
             
@@ -781,29 +800,18 @@ async def handle_voice(message: types.Message, bot: Bot):
         if os.path.exists(ogg_path): os.remove(ogg_path)
         if os.path.exists(wav_path): os.remove(wav_path)
 
-# ==================== خادم الويب للتطبيق المصغر ====================
-
-async def handle_options(request):
-    """السماح بطلبات CORS"""
-    return web.Response(
-        status=200,
-        headers={
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-            'Access-Control-Allow-Headers': 'Content-Type',
-        }
-    )
+# ==================== خادم الويب ====================
 
 async def handle_web_chat(request):
-    """استقبال الرسائل النصية من تطبيق الويب المصغر"""
     try:
         data = await request.json()
         user_text = data.get('content', '')
+        user_id = request.headers.get('X-User-Id', 'web_user')
         
         if not user_text:
             return web.json_response({'status': 'error', 'message': 'نص فارغ'})
         
-        response = await gemini_client.generate(user_text)
+        response = await gemini_client.generate(user_text, user_id)
         
         return web.json_response({
             'status': 'success',
@@ -813,46 +821,9 @@ async def handle_web_chat(request):
         logger.error(f"Web chat error: {e}")
         return web.json_response({'status': 'error', 'message': 'حدث خطأ'})
 
-async def handle_web_upload(request):
-    """استقبال الملفات من تطبيق الويب المصغر"""
-    try:
-        reader = await request.multipart()
-        field = await reader.next()
-        
-        file_data = await field.read()
-        filename = field.filename
-        
-        temp_path = f"/tmp/web_{filename}"
-        with open(temp_path, 'wb') as f:
-            f.write(file_data)
-        
-        with open(temp_path, 'rb') as f:
-            content = f.read()
-        
-        prompt = f"حلل هذا الملف ({filename}) وقدم ملخصاً لمحتواه"
-        response = await gemini_client.generate(prompt)
-        
-        os.remove(temp_path)
-        
-        return web.json_response({
-            'status': 'success',
-            'response': response,
-            'filename': filename
-        })
-    except Exception as e:
-        logger.error(f"Web upload error: {e}")
-        return web.json_response({'status': 'error', 'message': 'حدث خطأ أثناء رفع الملف'})
-
 async def init_web_server():
-    """تشغيل خادم الويب"""
     app = web.Application()
-    
-    # دعم CORS
-    app.router.add_route('OPTIONS', '/api/chat', handle_options)
-    app.router.add_route('OPTIONS', '/api/upload', handle_options)
-    
     app.router.add_post('/api/chat', handle_web_chat)
-    app.router.add_post('/api/upload', handle_web_upload)
     
     runner = web.AppRunner(app)
     await runner.setup()
