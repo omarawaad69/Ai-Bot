@@ -526,7 +526,7 @@ async def handle_buttons(message: types.Message):
     elif message.text == "👨‍💻 تواصل مع المبرمج":
         await message.answer(
             f"👨‍💻 *المبرمج:* {DEVELOPER_NAME}\n\n"
-            "📧 *للتواصل:* ابحث عن omarawaad68 في تيليجرام.",
+            f"📧 *للتواصل:* \u200E@omarawad68",
             parse_mode="Markdown"
         )
     elif message.text == "🔄 تحويل ملفات":
