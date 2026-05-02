@@ -31,6 +31,7 @@ DEVELOPER_NAME = "Omar Abd El Gawaad"
 DEVELOPER_USERNAME = "@omarawad68"
 
 user_conversion_choice = {}
+user_pending_file = {}  # لتخزين الملفات المعلقة للتحويل
 
 SYSTEM_PROMPT = """
 أنت "مستشار الذكاء الاصطناعي الخارق". أنت تجمع بين خبير موسوعي ومبرمج عبقري. هدفك تقديم إجابات دقيقة واحترافية في كل المجالات، مع قدرة استثنائية على البرمجة.
@@ -523,6 +524,55 @@ async def handle_message(message: types.Message):
     update_user_activity(message.from_user)
     user_text = message.text
     text_lower = user_text.lower()
+    user_id = message.from_user.id
+
+    # التحقق مما إذا كان المستخدم في وضع انتظار اختيار صيغة التحويل
+    if user_id in user_pending_file:
+        chosen_format = None
+        if user_text.lower() in ['pdf', 'word', 'docx', 'excel', 'xlsx']:
+            if user_text.lower() in ['pdf']: chosen_format = 'pdf'
+            elif user_text.lower() in ['word', 'docx']: chosen_format = 'docx'
+            elif user_text.lower() in ['excel', 'xlsx']: chosen_format = 'xlsx'
+        
+        if chosen_format:
+            pending = user_pending_file.pop(user_id)
+            await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+            try:
+                inpath = f"/tmp/{user_id}_{pending['filename']}"
+                with open(inpath, 'wb') as f:
+                    f.write(pending['file_bytes'])
+                result = subprocess.run(
+                    ['libreoffice', '--headless', '--convert-to', chosen_format,
+                     '--outdir', '/tmp/', inpath],
+                    capture_output=True, text=True, timeout=60
+                )
+                base_name = os.path.splitext(pending['filename'])[0]
+                expected_out = f"/tmp/{base_name}.{chosen_format}"
+                if os.path.exists(expected_out) and os.path.getsize(expected_out) > 100:
+                    await message.reply_document(
+                        FSInputFile(expected_out),
+                        caption=f"✅ تم التحويل إلى {chosen_format.upper()}"
+                    )
+                else:
+                    possible_files = glob.glob(f"/tmp/*.{chosen_format}")
+                    found = False
+                    for pf in possible_files:
+                        if os.path.getsize(pf) > 100:
+                            await message.reply_document(
+                                FSInputFile(pf),
+                                caption=f"✅ تم التحويل إلى {chosen_format.upper()}"
+                            )
+                            os.remove(pf)
+                            found = True
+                            break
+                    if not found:
+                        await message.reply("❌ فشل التحويل.")
+                if os.path.exists(inpath): os.remove(inpath)
+                if os.path.exists(expected_out): os.remove(expected_out)
+            except Exception as e:
+                logger.error(f"Convert error: {e}")
+                await message.reply("❌ حدث خطأ أثناء التحويل.")
+            return
 
     if user_text in ["💬 ابدأ محادثة", "🖼️ تحليل صورة", "📄 تحويل نص لملف", "📊 تحويل لإكسيل", "🎤 إرسال صوت", "👨‍💻 تواصل مع المبرمج", "🔄 تحويل ملفات", "🌐 ترجمة فورية"]:
         return
@@ -705,12 +755,18 @@ async def handle_document(message: types.Message, bot: Bot):
             except Exception as e:
                 logger.error(f"Convert error: {e}")
                 await message.reply("❌ حدث خطأ أثناء التحويل.")
-            # حذف حالة المستخدم بعد التحويل أو الفشل
+            # حذف حالة المستخدم بعد التحويل
             if user_id in user_conversion_choice:
                 del user_conversion_choice[user_id]
             return
         else:
-            # لم يحدد صيغة، نطلب منه التحديد
+            # تخزين الملف مؤقتاً وانتظار اختيار الصيغة
+            file_info = await bot.get_file(doc.file_id)
+            file_bytes = await bot.download_file(file_info.file_path)
+            user_pending_file[user_id] = {
+                'file_bytes': file_bytes.read(),
+                'filename': fname
+            }
             await message.reply("📝 *إلى أي صيغة تريد التحويل؟*\n• pdf\n• word\n• excel", parse_mode="Markdown")
             return
     
