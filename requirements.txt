@@ -7,5 +7,3 @@ python-docx
 SpeechRecognition
 openpyxl
 aiohttp
-googlesearch-python
-tavily-python
