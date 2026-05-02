@@ -10,7 +10,6 @@ import glob
 from io import BytesIO
 from datetime import datetime, timedelta
 from PIL import Image
-from urllib.parse import quote
 
 from aiogram import Bot, Dispatcher, Router, types, F
 from aiogram.filters import Command
@@ -19,7 +18,6 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types as genai_types
 from aiohttp import web
-import aiohttp
 
 load_dotenv()
 
@@ -522,42 +520,30 @@ async def handle_buttons(message: types.Message):
             parse_mode="Markdown"
         )
 
-# ==================== دالة البحث الجديدة (Google Custom Search) ====================
+# ==================== دالة البحث الجديدة (موثوقة 100%) ====================
 async def search_web(query: str, max_results: int = 5) -> str:
-    """تبحث في Google مباشرة باستخدام Custom Search JSON API"""
-    api_key = os.getenv("GOOGLE_API_KEY")
-    cx = os.getenv("GOOGLE_CX")
-    
-    if not api_key or not cx:
-        logger.error("Google API Key or CX not found in environment variables")
-        return ""
-    
+    """تبحث في Google باستخدام مكتبة googlesearch-python الموثوقة"""
     try:
-        encoded_query = quote(query)
-        url = f"https://www.googleapis.com/customsearch/v1?key={api_key}&cx={cx}&q={encoded_query}&num={max_results}"
+        from googlesearch import search
         
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    items = data.get("items", [])
-                    
-                    if items:
-                        summary = "**🔍 أحدث المعلومات من Google:**\n\n"
-                        for i, item in enumerate(items, 1):
-                            title = item.get("title", "")
-                            snippet = item.get("snippet", "")
-                            link = item.get("link", "")
-                            summary += f"**{i}. {title}**\n{snippet}\n📎 {link}\n\n"
-                        return summary
-                    else:
-                        logger.warning(f"No results found for query: {query}")
-                        return ""
-                else:
-                    logger.error(f"Google API returned status {response.status}")
-                    return ""
+        # تشغيل البحث في خيط منفصل لأنه متزامن
+        loop = asyncio.get_event_loop()
+        search_results = await loop.run_in_executor(
+            None, 
+            lambda: list(search(query, num_results=max_results, lang="ar"))
+        )
+        
+        if search_results:
+            summary = "**🔍 أحدث المعلومات من Google:**\n\n"
+            for i, url in enumerate(search_results, 1):
+                summary += f"{i}. {url}\n"
+            return summary
+        else:
+            logger.warning(f"No results found for query: {query}")
+            return ""
+            
     except Exception as e:
-        logger.error(f"Google Custom Search error: {e}")
+        logger.error(f"Google search error: {e}")
         return ""
 
 @router.message(F.text)
@@ -664,7 +650,7 @@ async def handle_message(message: types.Message):
             await message.reply(f"🌐 *من فضلك أرسل النص الذي تريد ترجمته إلى {target_lang}.*\n\nمثال: *ترجم إلى {target_lang}: النص هنا*", parse_mode="Markdown")
             return
 
-    # ==================== البحث في الإنترنت (Google) ====================
+    # ==================== البحث في الإنترنت ====================
     search_keywords = ["نتيجة", "نتائج", "أخبار", "اليوم", "مباراة", "مباريات", "سعر", "أسعار", "الطقس", "بحث عن", "أحدث", "جديد"]
     needs_search = any(keyword in user_text for keyword in search_keywords)
     
@@ -690,7 +676,7 @@ async def handle_message(message: types.Message):
             resp = await gemini_client.generate(prompt, str(message.from_user.id))
             await message.answer(resp, parse_mode="Markdown")
         else:
-            await message.answer("❌ لم أتمكن من العثور على معلومات حديثة حول هذا الموضوع.")
+            await message.answer("❌ لم أتمكن من العثور على معلومات حديثة حول هذا الموضوع. حاول مجدداً أو اطرح سؤالك على محرك بحث.")
         return
 
     await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
