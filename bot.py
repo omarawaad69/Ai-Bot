@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types as genai_types
 from aiohttp import web
+from duckduckgo_search import DDGS  # <-- مكتبة البحث الجديدة
 
 load_dotenv()
 
@@ -28,9 +29,9 @@ router = Router()
 
 ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "7361263893"))
 DEVELOPER_NAME = "Omar Abd El Gawaad"
+DEVELOPER_USERNAME = "@omarawad68"
 
 user_conversion_choice = {}
-user_translate_state = {}
 
 SYSTEM_PROMPT = """
 أنت "مستشار الذكاء الاصطناعي الخارق". أنت تجمع بين خبير موسوعي ومبرمج عبقري. هدفك تقديم إجابات دقيقة واحترافية في كل المجالات، مع قدرة استثنائية على البرمجة.
@@ -91,10 +92,11 @@ class AsyncGeminiClient:
         if user_id not in self.conversations:
             self.conversations[user_id] = []
         
-        if len(self.conversations[user_id]) >= 2:
-            is_new_topic = self._detect_topic_change(prompt, self.conversations[user_id])
-            if is_new_topic:
-                self.conversations[user_id] = self.conversations[user_id][-2:]
+        # تم تعطيل اكتشاف تغيير الموضوع لتسريع الردود
+        # if len(self.conversations[user_id]) >= 2:
+        #     is_new_topic = self._detect_topic_change(prompt, self.conversations[user_id])
+        #     if is_new_topic:
+        #         self.conversations[user_id] = self.conversations[user_id][-2:]
         
         self.conversations[user_id].append({
             "role": "user",
@@ -105,7 +107,7 @@ class AsyncGeminiClient:
             self.conversations[user_id] = self.conversations[user_id][-15:]
         
         full_context = [
-            {"role": "user", "parts": [{"text": "أنت مستشار ذكي. تذكر محادثتنا. إذا تغير الموضوع، ابدأ بداية جديدة."}]},
+            {"role": "user", "parts": [{"text": "أنت مستشار ذكي. تذكر محادثتنا."}]},
             {"role": "model", "parts": [{"text": "حسناً، سأتذكر محادثتنا."}]},
             *self.conversations[user_id]
         ]
@@ -131,30 +133,6 @@ class AsyncGeminiClient:
                     time.sleep(1)
                 else:
                     return "عذراً، حدث خطأ مؤقت."
-    
-    def _detect_topic_change(self, new_message: str, history: list) -> bool:
-        if len(history) < 2:
-            return False
-        
-        last_messages = " ".join([
-            m.get("parts", [{}])[0].get("text", "") 
-            for m in history[-4:]
-        ])
-        
-        try:
-            response = self.client.models.generate_content(
-                model=self.model,
-                contents=[{
-                    "parts": [{
-                        "text": f"هل هذا السؤال مرتبط بنفس موضوع المحادثة السابقة؟ أجب بـ 'نعم' أو 'لا' فقط.\n\nالسابقة: {last_messages}\n\nالجديد: {new_message}"
-                    }]
-                }]
-            )
-            
-            answer = response.text.strip()
-            return "لا" in answer
-        except:
-            return False
 
     async def generate_with_media(self, prompt: str, media_parts: list) -> str:
         loop = asyncio.get_event_loop()
@@ -407,7 +385,7 @@ async def cmd_start(message: types.Message):
     await message.answer(
         "🎉 أهلاً بك! أنا مستشار الذكاء الاصطناعي الخارق.\n\n"
         "✨ ماذا يمكنني أن أفعل لك؟\n"
-        "- الإجابة عن أي سؤال\n"
+        "- الإجابة عن أي سؤال (بما في ذلك الأحداث الجارية)\n"
         "- كتابة وشرح الأكواد البرمجية\n"
         "- تحويل النصوص إلى Word أو PDF أو Excel\n"
         "- تحويل الملفات بين الصيغ\n"
@@ -485,8 +463,7 @@ async def cmd_translate(message: types.Message):
         "1️⃣ *أرسل النص بهذا الشكل:*\n"
         "`ترجم إلى الفرنسية: مرحباً، كيف حالك؟`\n\n"
         "2️⃣ *أرسل رسالة صوتية:*\n"
-        "سأحولها إلى نص ثم أترجمها لك.\n"
-        "يمكنك تحديد اللغة في نفس الرسالة الصوتية.\n\n"
+        "سأحولها إلى نص ثم أترجمها لك.\n\n"
         "📝 *مثال للأوامر:*\n"
         "- ترجم إلى الإنجليزية: النص\n"
         "- ترجم إلى الإسبانية: النص\n"
@@ -542,14 +519,30 @@ async def handle_buttons(message: types.Message):
             "1️⃣ *أرسل النص بهذا الشكل:*\n"
             "`ترجم إلى الفرنسية: مرحباً، كيف حالك؟`\n\n"
             "2️⃣ *أرسل رسالة صوتية:*\n"
-            "سأحولها إلى نص ثم أترجمها لك.\n"
-            "يمكنك تحديد اللغة في نفس الرسالة الصوتية.\n\n"
+            "سأحولها إلى نص ثم أترجمها لك.\n\n"
             "📝 *مثال للأوامر:*\n"
             "- ترجم إلى الإنجليزية: النص\n"
             "- ترجم إلى الإسبانية: النص\n"
             "- ترجم إلى الألمانية: النص",
             parse_mode="Markdown"
         )
+
+# ==================== دالة البحث في الإنترنت ====================
+async def search_web(query: str, max_results: int = 3) -> str:
+    """يبحث في الإنترنت ويرجع ملخصًا"""
+    try:
+        loop = asyncio.get_event_loop()
+        results = await loop.run_in_executor(None, lambda: list(DDGS().text(query, max_results=max_results)))
+        if not results:
+            return ""
+        
+        summary = "**🔍 أحدث المعلومات من الإنترنت:**\n"
+        for i, r in enumerate(results, 1):
+            summary += f"{i}. {r['title']}\n{r['body']}\n\n"
+        return summary
+    except Exception as e:
+        logger.error(f"Search error: {e}")
+        return ""
 
 @router.message(F.text)
 async def handle_message(message: types.Message):
@@ -654,6 +647,35 @@ async def handle_message(message: types.Message):
         elif target_lang:
             await message.reply(f"🌐 *من فضلك أرسل النص الذي تريد ترجمته إلى {target_lang}.*\n\nمثال: *ترجم إلى {target_lang}: النص هنا*", parse_mode="Markdown")
             return
+
+    # ==================== البحث في الإنترنت ====================
+    search_keywords = ["نتيجة", "نتائج", "أخبار", "اليوم", "مباراة", "مباريات", "سعر", "أسعار", "الطقس", "بحث عن", "أحدث", "جديد"]
+    needs_search = any(keyword in user_text for keyword in search_keywords)
+    
+    if message.text.startswith("/search") or needs_search:
+        query = user_text.replace("/search", "").strip()
+        if not query:
+            query = user_text
+            
+        await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+        
+        search_results = await search_web(query)
+        
+        if search_results:
+            prompt = f"""استخدم المعلومات التالية من الإنترنت للإجابة على سؤال المستخدم.
+            قدم إجابة محدثة ودقيقة بناءً على هذه المعلومات فقط. اذكر المصدر (رقم النتيجة).
+            إذا كانت المعلومات غير كافية، فقل ذلك بوضوح.
+            
+            سؤال المستخدم: {user_text}
+            
+            معلومات البحث:
+            {search_results}
+            """
+            resp = await gemini_client.generate(prompt, str(message.from_user.id))
+            await message.answer(resp, parse_mode="Markdown")
+        else:
+            await message.answer("❌ لم أتمكن من العثور على معلومات حديثة حول هذا الموضوع. حاول مجدداً أو اطرح سؤالك على محرك بحث.")
+        return
 
     await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
     resp = await gemini_client.generate(user_text, str(message.from_user.id))
@@ -853,19 +875,9 @@ async def handle_voice(message: types.Message, bot: Bot):
             return
         
         await message.reply(f"🎤 *لقد فهمت:* _{text}_", parse_mode="Markdown")
-        
-        # التحقق مما إذا كان المستخدم قد حدد لغة للترجمة
-        user_id = str(message.from_user.id)
-        if user_id in user_translate_state:
-            target_lang = user_translate_state[user_id]
-            await message.reply(f"🌐 *جاري الترجمة إلى {target_lang}...*", parse_mode="Markdown")
-            prompt = f"ترجم النص التالي إلى {target_lang}. أرسل الترجمة فقط بدون أي كلام إضافي:\n\n{text}"
-            translation = await gemini_client.generate(prompt, user_id)
-            await message.answer(f"🌐 *الترجمة إلى {target_lang}:*\n\n{translation}", parse_mode="Markdown")
-        else:
-            resp = await gemini_client.generate(text, user_id)
-            for i in range(0, len(resp), 4000):
-                await message.answer(resp[i:i+4000])
+        resp = await gemini_client.generate(text, str(message.from_user.id))
+        for i in range(0, len(resp), 4000):
+            await message.answer(resp[i:i+4000])
             
     except ImportError:
         await message.reply("⚠️ مكتبة الصوت غير مثبتة.")
