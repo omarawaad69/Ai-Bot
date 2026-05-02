@@ -8,3 +8,4 @@ SpeechRecognition
 openpyxl
 aiohttp
 googlesearch-python
+tavily-python
