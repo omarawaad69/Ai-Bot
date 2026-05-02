@@ -78,10 +78,10 @@ def update_user_activity(user: types.User):
         logger.error(f"User activity error: {e}")
 
 class AsyncGeminiClient:
-    def __init__(self, model: str = "gemini-3.1-flash-lite-preview"):
+    # التعديل الوحيد: تغيير اسم النموذج إلى الإصدار الأحدث
+    def __init__(self, model: str = "gemini-2.5-flash"):
         self.client = genai.Client()
         self.model = model
-        self.conversations = {}
 
     async def generate(self, prompt: str, user_id: str = "default") -> str:
         loop = asyncio.get_event_loop()
