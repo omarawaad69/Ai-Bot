@@ -8,3 +8,4 @@ SpeechRecognition
 openpyxl
 aiohttp
 duckduckgo_search
+googlesearch-python
