@@ -520,46 +520,6 @@ async def handle_buttons(message: types.Message):
             parse_mode="Markdown"
         )
 
-# ==================== دالة البحث (Tavily + Google) ====================
-async def search_web(query: str, max_results: int = 5) -> str:
-    """تبحث في الإنترنت باستخدام Tavily API، مع خطة بديلة لـ Google"""
-    tavily_api_key = os.getenv("TAVILY_API_KEY")
-    
-    if tavily_api_key:
-        try:
-            from tavily import TavilyClient
-            client = TavilyClient(api_key=tavily_api_key)
-            response = await asyncio.get_event_loop().run_in_executor(
-                None, 
-                lambda: client.search(query, max_results=max_results)
-            )
-            results = response.get("results", [])
-            if results:
-                summary = "**🔍 أحدث المعلومات من Tavily:**\n\n"
-                for i, r in enumerate(results, 1):
-                    summary += f"{i}. {r['title']}\n{r['content']}\n📎 {r['url']}\n\n"
-                return summary
-        except Exception as e:
-            logger.error(f"Tavily search error: {e}")
-
-    # خطة بديلة
-    try:
-        from googlesearch import search
-        loop = asyncio.get_event_loop()
-        search_results = await loop.run_in_executor(
-            None, 
-            lambda: list(search(query, num_results=max_results, lang="ar"))
-        )
-        if search_results:
-            summary = "**🔍 أحدث المعلومات من Google:**\n\n"
-            for i, url in enumerate(search_results, 1):
-                summary += f"{i}. {url}\n"
-            return summary
-    except Exception as e:
-        logger.error(f"Google search error: {e}")
-
-    return ""
-
 @router.message(F.text)
 async def handle_message(message: types.Message):
     update_user_activity(message.from_user)
@@ -663,35 +623,6 @@ async def handle_message(message: types.Message):
         elif target_lang:
             await message.reply(f"🌐 *من فضلك أرسل النص الذي تريد ترجمته إلى {target_lang}.*\n\nمثال: *ترجم إلى {target_lang}: النص هنا*", parse_mode="Markdown")
             return
-
-    # ==================== البحث في الإنترنت ====================
-    search_keywords = ["نتيجة", "نتائج", "أخبار", "اليوم", "مباراة", "مباريات", "سعر", "أسعار", "الطقس", "بحث عن", "أحدث", "جديد"]
-    needs_search = any(keyword in user_text for keyword in search_keywords)
-    
-    if message.text.startswith("/search") or needs_search:
-        query = user_text.replace("/search", "").strip()
-        if not query:
-            query = user_text
-            
-        await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
-        
-        search_results = await search_web(query)
-        
-        if search_results:
-            prompt = f"""استخدم المعلومات التالية من الإنترنت للإجابة على سؤال المستخدم.
-            قدم إجابة محدثة ودقيقة بناءً على هذه المعلومات فقط. اذكر المصدر (رقم النتيجة).
-            إذا كانت المعلومات غير كافية، فقل ذلك بوضوح.
-            
-            سؤال المستخدم: {user_text}
-            
-            معلومات البحث:
-            {search_results}
-            """
-            resp = await gemini_client.generate(prompt, str(message.from_user.id))
-            await message.answer(resp, parse_mode="Markdown")
-        else:
-            await message.answer("❌ لم أتمكن من العثور على معلومات حديثة حول هذا الموضوع. حاول مجدداً أو اطرح سؤالك على محرك بحث.")
-        return
 
     await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
     resp = await gemini_client.generate(user_text, str(message.from_user.id))
