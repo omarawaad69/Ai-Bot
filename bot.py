@@ -520,31 +520,48 @@ async def handle_buttons(message: types.Message):
             parse_mode="Markdown"
         )
 
-# ==================== دالة البحث الجديدة (موثوقة 100%) ====================
+# ==================== دالة البحث الجديدة (Tavily API) ====================
 async def search_web(query: str, max_results: int = 5) -> str:
-    """تبحث في Google باستخدام مكتبة googlesearch-python الموثوقة"""
+    """تبحث في الإنترنت باستخدام Tavily API، مع خطة بديلة لـ Google"""
+    tavily_api_key = os.getenv("TAVILY_API_KEY")
+    
+    if tavily_api_key:
+        try:
+            from tavily import TavilyClient
+            client = TavilyClient(api_key=tavily_api_key)
+            response = await asyncio.get_event_loop().run_in_executor(
+                None, 
+                lambda: client.search(query, max_results=max_results)
+            )
+            results = response.get("results", [])
+            if results:
+                summary = "**🔍 أحدث المعلومات من Tavily:**\n\n"
+                for i, r in enumerate(results, 1):
+                    summary += f"{i}. {r['title']}\n{r['content']}\n📎 {r['url']}\n\n"
+                return summary
+            else:
+                logger.warning(f"No results found for query: {query}")
+                return ""
+        except Exception as e:
+            logger.error(f"Tavily search error: {e}")
+
+    # خطة بديلة: استخدام googlesearch-python
     try:
         from googlesearch import search
-        
-        # تشغيل البحث في خيط منفصل لأنه متزامن
         loop = asyncio.get_event_loop()
         search_results = await loop.run_in_executor(
             None, 
             lambda: list(search(query, num_results=max_results, lang="ar"))
         )
-        
         if search_results:
             summary = "**🔍 أحدث المعلومات من Google:**\n\n"
             for i, url in enumerate(search_results, 1):
                 summary += f"{i}. {url}\n"
             return summary
-        else:
-            logger.warning(f"No results found for query: {query}")
-            return ""
-            
     except Exception as e:
         logger.error(f"Google search error: {e}")
-        return ""
+
+    return ""
 
 @router.message(F.text)
 async def handle_message(message: types.Message):
@@ -650,7 +667,7 @@ async def handle_message(message: types.Message):
             await message.reply(f"🌐 *من فضلك أرسل النص الذي تريد ترجمته إلى {target_lang}.*\n\nمثال: *ترجم إلى {target_lang}: النص هنا*", parse_mode="Markdown")
             return
 
-    # ==================== البحث في الإنترنت ====================
+    # ==================== البحث في الإنترنت (Tavily أساسي) ====================
     search_keywords = ["نتيجة", "نتائج", "أخبار", "اليوم", "مباراة", "مباريات", "سعر", "أسعار", "الطقس", "بحث عن", "أحدث", "جديد"]
     needs_search = any(keyword in user_text for keyword in search_keywords)
     
