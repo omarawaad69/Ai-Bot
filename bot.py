@@ -18,7 +18,6 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types as genai_types
 from aiohttp import web
-from duckduckgo_search import DDGS  # <-- مكتبة البحث الجديدة
 
 load_dotenv()
 
@@ -91,12 +90,6 @@ class AsyncGeminiClient:
     def _sync_generate(self, prompt: str, user_id: str = "default") -> str:
         if user_id not in self.conversations:
             self.conversations[user_id] = []
-        
-        # تم تعطيل اكتشاف تغيير الموضوع لتسريع الردود
-        # if len(self.conversations[user_id]) >= 2:
-        #     is_new_topic = self._detect_topic_change(prompt, self.conversations[user_id])
-        #     if is_new_topic:
-        #         self.conversations[user_id] = self.conversations[user_id][-2:]
         
         self.conversations[user_id].append({
             "role": "user",
@@ -527,22 +520,36 @@ async def handle_buttons(message: types.Message):
             parse_mode="Markdown"
         )
 
-# ==================== دالة البحث في الإنترنت ====================
-async def search_web(query: str, max_results: int = 3) -> str:
-    """يبحث في الإنترنت ويرجع ملخصًا"""
+# ==================== دالة البحث المُحسَّنة ====================
+async def search_web(query: str, max_results: int = 5) -> str:
+    """يبحث في DuckDuckGo أولاً، ثم Google كخطة بديلة"""
+    # --- المحاولة الأولى: DuckDuckGo ---
     try:
+        from duckduckgo_search import DDGS
         loop = asyncio.get_event_loop()
         results = await loop.run_in_executor(None, lambda: list(DDGS().text(query, max_results=max_results)))
-        if not results:
-            return ""
-        
-        summary = "**🔍 أحدث المعلومات من الإنترنت:**\n"
-        for i, r in enumerate(results, 1):
-            summary += f"{i}. {r['title']}\n{r['body']}\n\n"
-        return summary
+        if results:
+            summary = "**🔍 أحدث المعلومات من DuckDuckGo:**\n"
+            for i, r in enumerate(results, 1):
+                summary += f"{i}. {r['title']}\n{r['body']}\n\n"
+            return summary
     except Exception as e:
-        logger.error(f"Search error: {e}")
-        return ""
+        logger.warning(f"DuckDuckGo search failed (will try Google): {e}")
+
+    # --- الخطة البديلة: Google ---
+    try:
+        from googlesearch import search
+        loop = asyncio.get_event_loop()
+        search_results = await loop.run_in_executor(None, lambda: list(search(query, num_results=max_results)))
+        if search_results:
+            summary = "**🔍 أحدث المعلومات من Google:**\n"
+            for i, url in enumerate(search_results, 1):
+                summary += f"{i}. {url}\n"
+            return summary
+    except Exception as e:
+        logger.error(f"Google search also failed: {e}")
+
+    return ""
 
 @router.message(F.text)
 async def handle_message(message: types.Message):
