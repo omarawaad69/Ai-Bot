@@ -78,8 +78,7 @@ def update_user_activity(user: types.User):
         logger.error(f"User activity error: {e}")
 
 class AsyncGeminiClient:
-    # التعديل الوحيد: تغيير اسم النموذج إلى الإصدار الأحدث
-    def __init__(self, model: str = "gemini-2.5-flash"):
+    def __init__(self, model: str = "gemma-4-31b"):
         self.client = genai.Client()
         self.model = model
 
