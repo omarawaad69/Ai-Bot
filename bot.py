@@ -81,6 +81,7 @@ class AsyncGeminiClient:
     def __init__(self, model: str = "gemini-1.5-flash"):
         self.client = genai.Client()
         self.model = model
+        self.conversations = {}
 
     async def generate(self, prompt: str, user_id: str = "default") -> str:
         loop = asyncio.get_event_loop()
@@ -519,7 +520,7 @@ async def handle_buttons(message: types.Message):
             parse_mode="Markdown"
         )
 
-# ==================== دالة البحث الجديدة (Tavily API) ====================
+# ==================== دالة البحث (Tavily + Google) ====================
 async def search_web(query: str, max_results: int = 5) -> str:
     """تبحث في الإنترنت باستخدام Tavily API، مع خطة بديلة لـ Google"""
     tavily_api_key = os.getenv("TAVILY_API_KEY")
@@ -538,13 +539,10 @@ async def search_web(query: str, max_results: int = 5) -> str:
                 for i, r in enumerate(results, 1):
                     summary += f"{i}. {r['title']}\n{r['content']}\n📎 {r['url']}\n\n"
                 return summary
-            else:
-                logger.warning(f"No results found for query: {query}")
-                return ""
         except Exception as e:
             logger.error(f"Tavily search error: {e}")
 
-    # خطة بديلة: استخدام googlesearch-python
+    # خطة بديلة
     try:
         from googlesearch import search
         loop = asyncio.get_event_loop()
@@ -666,7 +664,7 @@ async def handle_message(message: types.Message):
             await message.reply(f"🌐 *من فضلك أرسل النص الذي تريد ترجمته إلى {target_lang}.*\n\nمثال: *ترجم إلى {target_lang}: النص هنا*", parse_mode="Markdown")
             return
 
-    # ==================== البحث في الإنترنت (Tavily أساسي) ====================
+    # ==================== البحث في الإنترنت ====================
     search_keywords = ["نتيجة", "نتائج", "أخبار", "اليوم", "مباراة", "مباريات", "سعر", "أسعار", "الطقس", "بحث عن", "أحدث", "جديد"]
     needs_search = any(keyword in user_text for keyword in search_keywords)
     
