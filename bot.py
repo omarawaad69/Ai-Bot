@@ -338,12 +338,10 @@ async def handle_conversion_callback(callback: CallbackQuery):
     }
     
     if data == "convert_any":
+        # تخزين حالة المستخدم: ينتظر إرسال ملف
+        user_conversion_choice[user_id] = ("any", None, "أي صيغة لأي صيغة")
         await callback.message.answer(
-            "🔄 *تحويل من أي صيغة لأي صيغة*\n\n"
-            "أرسل الملف مع تعليق يحدد الصيغة:\n"
-            "• *حول لـ pdf*\n"
-            "• *حول لـ word*\n"
-            "• *حول لـ excel*",
+            "📁 *أرسل الملف الذي تريد تحويله*",
             parse_mode="Markdown"
         )
         await callback.answer("تم")
@@ -660,6 +658,62 @@ async def handle_document(message: types.Message, bot: Bot):
     cap = message.caption or ""
     user_id = message.from_user.id
     
+    # التحقق مما إذا كان المستخدم قد اختار "any" (أي صيغة لأي صيغة)
+    if user_id in user_conversion_choice and user_conversion_choice[user_id][0] == "any":
+        target = None
+        if cap:
+            c = cap.lower()
+            if "pdf" in c: target = "pdf"
+            elif "word" in c or "docx" in c: target = "docx"
+            elif "excel" in c or "xlsx" in c: target = "xlsx"
+        
+        if target:
+            await bot.send_chat_action(chat_id=message.chat.id, action="typing")
+            try:
+                file_info = await bot.get_file(doc.file_id)
+                file_bytes = await bot.download_file(file_info.file_path)
+                inpath = f"/tmp/{user_id}_{fname}"
+                with open(inpath, 'wb') as f:
+                    f.write(file_bytes.read())
+                result = subprocess.run(
+                    ['libreoffice', '--headless', '--convert-to', target,
+                     '--outdir', '/tmp/', inpath],
+                    capture_output=True, text=True, timeout=60
+                )
+                expected_out = f"/tmp/{os.path.splitext(fname)[0]}.{target}"
+                if os.path.exists(expected_out) and os.path.getsize(expected_out) > 100:
+                    await message.reply_document(
+                        FSInputFile(expected_out),
+                        caption=f"✅ تم التحويل إلى {target.upper()}"
+                    )
+                else:
+                    possible_files = glob.glob(f"/tmp/*.{target}")
+                    found = False
+                    for pf in possible_files:
+                        if os.path.getsize(pf) > 100:
+                            await message.reply_document(
+                                FSInputFile(pf),
+                                caption=f"✅ تم التحويل إلى {target.upper()}"
+                            )
+                            os.remove(pf)
+                            found = True
+                            break
+                    if not found:
+                        await message.reply("❌ فشل التحويل.")
+                if os.path.exists(inpath): os.remove(inpath)
+                if os.path.exists(expected_out): os.remove(expected_out)
+            except Exception as e:
+                logger.error(f"Convert error: {e}")
+                await message.reply("❌ حدث خطأ أثناء التحويل.")
+            # حذف حالة المستخدم بعد التحويل أو الفشل
+            if user_id in user_conversion_choice:
+                del user_conversion_choice[user_id]
+            return
+        else:
+            # لم يحدد صيغة، نطلب منه التحديد
+            await message.reply("📝 *إلى أي صيغة تريد التحويل؟*\n• pdf\n• word\n• excel", parse_mode="Markdown")
+            return
+    
     target = None
     if user_id in user_conversion_choice:
         source, target, label = user_conversion_choice[user_id]
@@ -676,19 +730,15 @@ async def handle_document(message: types.Message, bot: Bot):
         try:
             file_info = await bot.get_file(doc.file_id)
             file_bytes = await bot.download_file(file_info.file_path)
-            
             inpath = f"/tmp/{user_id}_{fname}"
             with open(inpath, 'wb') as f:
                 f.write(file_bytes.read())
-            
             result = subprocess.run(
                 ['libreoffice', '--headless', '--convert-to', target,
                  '--outdir', '/tmp/', inpath],
                 capture_output=True, text=True, timeout=60
             )
-            
             expected_out = f"/tmp/{os.path.splitext(fname)[0]}.{target}"
-            
             if os.path.exists(expected_out) and os.path.getsize(expected_out) > 100:
                 await message.reply_document(
                     FSInputFile(expected_out),
@@ -706,13 +756,10 @@ async def handle_document(message: types.Message, bot: Bot):
                         os.remove(pf)
                         found = True
                         break
-                
                 if not found:
                     await message.reply("❌ فشل التحويل.")
-            
             if os.path.exists(inpath): os.remove(inpath)
             if os.path.exists(expected_out): os.remove(expected_out)
-            
         except Exception as e:
             logger.error(f"Convert error: {e}")
             await message.reply("❌ حدث خطأ أثناء التحويل.")
@@ -738,7 +785,6 @@ async def handle_document(message: types.Message, bot: Bot):
         bio.seek(0)
         fb = bio.read()
         text = ""
-        
         if mime == "text/plain" or mime == "text/csv":
             text = fb.decode('utf-8', errors='ignore')
         elif mime == "application/pdf":
@@ -756,15 +802,12 @@ async def handle_document(message: types.Message, bot: Bot):
             ws = wb.active
             for row in ws.iter_rows(values_only=True):
                 text += " | ".join([str(cell) if cell else "" for cell in row]) + "\n"
-        
         if not text.strip():
             return await message.reply("⚠️ لم أستطع استخراج نص.")
-        
         prompt = f"حلل هذا المستند ({fname}). {cap or 'قدم ملخصاً'}\n\n{text[:10000]}"
         resp = await gemini_client.generate(prompt, str(user_id))
         for i in range(0, len(resp), 4000):
             await message.reply(resp[i:i+4000])
-            
     except Exception as e:
         logger.error(f"Doc error: {e}")
         await message.reply("عذراً، حدث خطأ.")
