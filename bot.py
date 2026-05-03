@@ -322,107 +322,13 @@ def get_conversion_keyboard():
     ])
     return keyboard
 
-def convert_pdf_to_word_preserving_tables(pdf_path, output_path):
-    """
-    Convert PDF to Word using rapcalion/pdf-to-word,
-    which preserves tables and formatting.
-    """
-    try:
-        if not os.path.exists('/tmp/pdf-to-word'):
-            subprocess.run(['git', 'clone', 'https://github.com/rapcalion/pdf-to-word.git', '/tmp/pdf-to-word'], check=True)
-        
-        subprocess.run(['pip', 'install', '-r', '/tmp/pdf-to-word/requirements.txt'], check=True)
-        
-        subprocess.run([
-            'python', '/tmp/pdf-to-word/convert_pdf.py',
-            pdf_path, '-o', output_path, '-m', 'hybrid'
-        ], check=True)
-        
-        return True
-    except Exception as e:
-        logger.error(f"PDF to Word conversion failed: {e}")
-        return False
-
-def convert_pdf_to_excel_arabic(pdf_path, output_path):
-    """
-    Convert PDF to Excel using Free Spire.PDF for Python,
-    then fix Arabic text direction using python-bidi.
-    """
-    try:
-        from spire.pdf.common import *
-        from spire.pdf import *
-        from openpyxl import Workbook
-        from bidi.algorithm import get_display
-        import arabic_reshaper
-        
-        doc = PdfDocument()
-        doc.LoadFromFile(pdf_path)
-        
-        options = XlsxLineLayoutOptions(False, False, False, True, False)
-        doc.ConvertOptions.SetPdfToXlsxOptions(options)
-        
-        temp_xlsx = output_path.replace('.xlsx', '_temp.xlsx')
-        doc.SaveToFile(temp_xlsx, FileFormat.XLSX)
-        doc.Close()
-        
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "PDF Data"
-        ws.sheet_view.rightToLeft = True
-        
-        from openpyxl import load_workbook
-        temp_wb = load_workbook(temp_xlsx)
-        temp_ws = temp_wb.active
-        
-        for row in temp_ws.iter_rows():
-            for cell in row:
-                if cell.value:
-                    reshaped_text = arabic_reshaper.reshape(str(cell.value))
-                    bidi_text = get_display(reshaped_text)
-                    new_cell = ws.cell(row=cell.row, column=cell.column, value=bidi_text)
-                    if cell.font:
-                        new_cell.font = cell.font.copy()
-                    if cell.alignment:
-                        new_cell.alignment = cell.alignment.copy()
-        
-        wb.save(output_path)
-        os.remove(temp_xlsx)
-        return True
-    except Exception as e:
-        logger.error(f"PDF to Excel conversion failed: {e}")
-        return False
-
-# استبدال دوال التحويل
 def run_libreoffice(args, timeout=60):
-    """Use rapcalion/pdf-to-word for PDF to Word conversion"""
-    input_files = [a for a in args if os.path.exists(a) and a.lower().endswith('.pdf')]
-    if not input_files:
-        return subprocess.run(
-            ['libreoffice', '--headless', '-env:UserInstallation=file:///tmp/libreoffice'] + args,
-            capture_output=True, text=True, timeout=timeout,
-            env={**os.environ, 'HOME': '/tmp', 'USERPROFILE': '/tmp'}
-        )
-    
-    input_file = input_files[0]
-    convert_index = args.index('--convert-to')
-    target_format = args[convert_index + 1]
-    
-    if '--outdir' in args:
-        outdir_index = args.index('--outdir') + 1
-        output_dir = args[outdir_index]
-    else:
-        output_dir = '/tmp/'
-    
-    base_name = os.path.splitext(os.path.basename(input_file))[0]
-    output_file = os.path.join(output_dir, f"{base_name}.{target_format}")
-    
-    if target_format == 'docx':
-        if convert_pdf_to_word_preserving_tables(input_file, output_file):
-            return None
-    
-    # fallback to LibreOffice
+    """تشغيل libreoffice مع الإعدادات الصحيحة للصلاحيات"""
     full_args = ['libreoffice', '--headless', '-env:UserInstallation=file:///tmp/libreoffice']
-    full_args.append('--infilter=writer_pdf_import')
+    input_files = [a for a in args if os.path.exists(a) and a.lower().endswith('.pdf')]
+    if input_files:
+        full_args.append('--infilter="writer_pdf_import"')
+    
     full_args.extend(args)
     return subprocess.run(
         full_args,
@@ -431,19 +337,27 @@ def run_libreoffice(args, timeout=60):
     )
 
 def convert_pdf_to_excel(input_path: str, output_path: str):
-    """Use Spire.PDF for PDF to Excel with Arabic text fix"""
-    if convert_pdf_to_excel_arabic(input_path, output_path):
-        return
-    
-    # fallback to pdfplumber
+    """تحويل PDF إلى Excel مع معالجة النص العربي"""
     import pdfplumber
     from openpyxl import Workbook
-    
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+    import arabic_reshaper
+    from bidi.algorithm import get_display
+
+    def fix_arabic(text):
+        if not text:
+            return ""
+        try:
+            reshaped = arabic_reshaper.reshape(str(text))
+            return get_display(reshaped)
+        except:
+            return str(text)
+
     wb = Workbook()
     ws = wb.active
     ws.title = "PDF Data"
     ws.sheet_view.rightToLeft = True
-    
+
     try:
         with pdfplumber.open(input_path) as pdf:
             current_row = 1
@@ -454,18 +368,34 @@ def convert_pdf_to_excel(input_path: str, output_path: str):
                         if table:
                             for row in table:
                                 for col_idx, cell_value in enumerate(row, 1):
-                                    ws.cell(row=current_row, column=col_idx, value=cell_value)
+                                    ws.cell(row=current_row, column=col_idx, value=fix_arabic(cell_value))
                                 current_row += 1
                             current_row += 1
                 else:
                     text = page.extract_text()
                     if text:
                         for line in text.split('\n'):
-                            ws.cell(row=current_row, column=1, value=line)
+                            ws.cell(row=current_row, column=1, value=fix_arabic(line))
                             current_row += 1
     except Exception as e:
         logger.error(f"PDF to Excel extraction error: {e}")
-    
+
+    # تنسيق الخلايا
+    header_font = Font(name='Arial', size=14, bold=True, color='FFFFFF')
+    header_fill = PatternFill(start_color='2F5496', end_color='2F5496', fill_type='solid')
+    cell_font = Font(name='Arial', size=12)
+    cell_alignment = Alignment(horizontal='center', vertical='center')
+    thin_border = Border(
+        left=Side(style='thin'), right=Side(style='thin'),
+        top=Side(style='thin'), bottom=Side(style='thin')
+    )
+
+    for row in ws.iter_rows(min_row=1, max_row=min(ws.max_row, 20)):
+        for cell in row:
+            cell.font = cell_font
+            cell.alignment = cell_alignment
+            cell.border = thin_border
+
     wb.save(output_path)
 
 @router.callback_query()
@@ -671,7 +601,6 @@ async def handle_message(message: types.Message):
     if user_text in ["💬 ابدأ محادثة", "🖼️ تحليل صورة", "📄 تحويل نص لملف", "📊 تحويل لإكسيل", "🎤 إرسال صوت", "👨‍💻 تواصل مع المبرمج", "🔄 تحويل ملفات", "🌐 ترجمة فورية"]:
         return
 
-    # ==================== التحقق من الملفات المعلقة ====================
     user_id = message.from_user.id
     if user_id in user_pending_file:
         chosen_format = None
@@ -694,19 +623,13 @@ async def handle_message(message: types.Message):
                     run_libreoffice(['--convert-to', chosen_format, '--outdir', '/tmp/', inpath])
                 
                 if os.path.exists(expected_out) and os.path.getsize(expected_out) > 100:
-                    await message.reply_document(
-                        FSInputFile(expected_out),
-                        caption=f"✅ تم التحويل إلى {chosen_format.upper()}"
-                    )
+                    await message.reply_document(FSInputFile(expected_out), caption=f"✅ تم التحويل إلى {chosen_format.upper()}")
                 else:
                     possible_files = glob.glob(f"/tmp/*.{chosen_format}")
                     found = False
                     for pf in possible_files:
                         if os.path.getsize(pf) > 100:
-                            await message.reply_document(
-                                FSInputFile(pf),
-                                caption=f"✅ تم التحويل إلى {chosen_format.upper()}"
-                            )
+                            await message.reply_document(FSInputFile(pf), caption=f"✅ تم التحويل إلى {chosen_format.upper()}")
                             os.remove(pf)
                             found = True
                             break
@@ -850,7 +773,6 @@ async def handle_document(message: types.Message, bot: Bot):
     cap = message.caption or ""
     user_id = message.from_user.id
     
-    # التحقق مما إذا كان المستخدم قد اختار "any" (أي صيغة لأي صيغة)
     if user_id in user_conversion_choice and user_conversion_choice[user_id][0] == "any":
         target = None
         if cap:
@@ -875,19 +797,13 @@ async def handle_document(message: types.Message, bot: Bot):
                     run_libreoffice(['--convert-to', target, '--outdir', '/tmp/', inpath])
                 
                 if os.path.exists(expected_out) and os.path.getsize(expected_out) > 100:
-                    await message.reply_document(
-                        FSInputFile(expected_out),
-                        caption=f"✅ تم التحويل إلى {target.upper()}"
-                    )
+                    await message.reply_document(FSInputFile(expected_out), caption=f"✅ تم التحويل إلى {target.upper()}")
                 else:
                     possible_files = glob.glob(f"/tmp/*.{target}")
                     found = False
                     for pf in possible_files:
                         if os.path.getsize(pf) > 100:
-                            await message.reply_document(
-                                FSInputFile(pf),
-                                caption=f"✅ تم التحويل إلى {target.upper()}"
-                            )
+                            await message.reply_document(FSInputFile(pf), caption=f"✅ تم التحويل إلى {target.upper()}")
                             os.remove(pf)
                             found = True
                             break
@@ -902,7 +818,6 @@ async def handle_document(message: types.Message, bot: Bot):
                 del user_conversion_choice[user_id]
             return
         else:
-            # تخزين الملف مؤقتاً وانتظار اختيار الصيغة
             file_info = await bot.get_file(doc.file_id)
             file_bytes = await bot.download_file(file_info.file_path)
             user_pending_file[user_id] = {
@@ -939,19 +854,13 @@ async def handle_document(message: types.Message, bot: Bot):
                 run_libreoffice(['--convert-to', target, '--outdir', '/tmp/', inpath])
             
             if os.path.exists(expected_out) and os.path.getsize(expected_out) > 100:
-                await message.reply_document(
-                    FSInputFile(expected_out),
-                    caption=f"✅ تم التحويل إلى {target.upper()}"
-                )
+                await message.reply_document(FSInputFile(expected_out), caption=f"✅ تم التحويل إلى {target.upper()}")
             else:
                 possible_files = glob.glob(f"/tmp/*.{target}")
                 found = False
                 for pf in possible_files:
                     if os.path.getsize(pf) > 100:
-                        await message.reply_document(
-                            FSInputFile(pf),
-                            caption=f"✅ تم التحويل إلى {target.upper()}"
-                        )
+                        await message.reply_document(FSInputFile(pf), caption=f"✅ تم التحويل إلى {target.upper()}")
                         os.remove(pf)
                         found = True
                         break
@@ -1116,4 +1025,4 @@ async def main():
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    asyncio.run(main())    
+    asyncio.run(main())
