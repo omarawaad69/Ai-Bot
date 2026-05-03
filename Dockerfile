@@ -8,6 +8,9 @@ RUN apt-get update -y && \
     libreoffice-writer \
     libreoffice-calc \
     libreoffice-impress \
+    libreoffice-common \
+    libreoffice-java-common \
+    default-jre-headless \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
