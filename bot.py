@@ -322,13 +322,79 @@ def get_conversion_keyboard():
     ])
     return keyboard
 
+# تأكد من تثبيت المكتبات المطلوبة:
+# pip install pdf2docx python-docx arabic-reshaper python-bidi
+
 def run_libreoffice(args, timeout=60):
-    """تشغيل libreoffice مع الإعدادات الصحيحة للصلاحيات"""
-    full_args = ['libreoffice', '--headless', '-env:UserInstallation=file:///tmp/libreoffice']
+    """
+    هذا الإصدار يستخدم pdf2docx لتحويل PDF إلى Word مع معالجة أفضل للنص العربي.
+    """
+    from pdf2docx import Converter
+    import docx
+    from docx.shared import Pt, Inches, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    # التحقق مما إذا كان التحويل مطلوبًا لملف PDF
     input_files = [a for a in args if os.path.exists(a) and a.lower().endswith('.pdf')]
-    if input_files:
-        full_args.append('--infilter=writer_pdf_import')
+    if not input_files:
+        # إذا لم يكن الملف PDF، نستخدم LibreOffice
+        return subprocess.run(
+            ['libreoffice', '--headless', '-env:UserInstallation=file:///tmp/libreoffice'] + args,
+            capture_output=True, text=True, timeout=timeout,
+            env={**os.environ, 'HOME': '/tmp', 'USERPROFILE': '/tmp'}
+        )
+
+    input_file = input_files[0]
     
+    # استخراج اسم الملف المُخرج من args (مثل 'docx')
+    convert_index = args.index('--convert-to')
+    target_format = args[convert_index + 1]
+    
+    # تحديد اسم ملف الإخراج بناءً على args أو اسم الملف الأصلي
+    if '--outdir' in args:
+        outdir_index = args.index('--outdir') + 1
+        output_dir = args[outdir_index]
+    else:
+        output_dir = '/tmp/'
+    
+    base_name = os.path.splitext(os.path.basename(input_file))[0]
+    output_file = os.path.join(output_dir, f"{base_name}.{target_format}")
+
+    try:
+        # الخطوة 1: استخدام pdf2docx لاستخراج النص (يهمل التنسيق الحالي السيء)
+        cv = Converter(input_file)
+        cv.convert(output_file)
+        cv.close()
+
+        # الخطوة 2: إعادة بناء ملف الوورد بتنسيق احترافي
+        doc = docx.Document()
+        
+        # إضافة عنوان رئيسي
+        title = doc.add_heading('مستند تم تحويله بواسطة البوت', level=1)
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # فتح الملف المُستخرج للقراءة وإعادة التنسيق
+        temp_doc = docx.Document(output_file)
+        for para in temp_doc.paragraphs:
+            if para.text.strip():
+                p = doc.add_paragraph(para.text)
+                # تعيين الخط ولون الخط وحجمه
+                for run in p.runs:
+                    run.font.name = 'Arial'
+                    run.font.size = Pt(12)
+                    run.font.color.rgb = RGBColor(0, 0, 0)
+
+        doc.save(output_file)
+        return None  # نجاح
+
+    except ImportError:
+        pass  # في حالة عدم وجود المكتبات، نكمل مع LibreOffice
+    except Exception as e:
+        logger.error(f"pdf2docx conversion failed: {e}")
+
+    # plan plan: استخدام LibreOffice مع إعدادات إضافية
+    full_args = ['libreoffice', '--headless', '-env:UserInstallation=file:///tmp/libreoffice']
+    full_args.append('--infilter=writer_pdf_import')
     full_args.extend(args)
     return subprocess.run(
         full_args,
@@ -336,34 +402,49 @@ def run_libreoffice(args, timeout=60):
         env={**os.environ, 'HOME': '/tmp', 'USERPROFILE': '/tmp'}
     )
 
+
 def convert_pdf_to_excel(input_path: str, output_path: str):
-    """تحويل PDF إلى Excel باستخدام pdfplumber"""
+    """
+    تحويل PDF إلى Excel مع معالجة اتجاه النص العربي.
+    """
     import pdfplumber
     from openpyxl import Workbook
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+    import arabic_reshaper
+    from bidi.algorithm import get_display
 
     wb = Workbook()
     ws = wb.active
     ws.title = "PDF Data"
 
+    def fix_arabic_text(text):
+        """تصحيح اتجاه النص العربي"""
+        if text is None:
+            return ""
+        reshaped_text = arabic_reshaper.reshape(str(text))
+        bidi_text = get_display(reshaped_text)
+        return bidi_text
+
     try:
         with pdfplumber.open(input_path) as pdf:
             current_row = 1
             for page in pdf.pages:
+                # محاولة استخراج الجداول أولاً
                 tables = page.extract_tables()
                 if tables:
                     for table in tables:
                         if table:
                             for row in table:
                                 for col_idx, cell_value in enumerate(row, 1):
-                                    ws.cell(row=current_row, column=col_idx, value=cell_value)
+                                    ws.cell(row=current_row, column=col_idx, value=fix_arabic_text(cell_value))
                                 current_row += 1
                             current_row += 1  # مسافة بين الجداول
                 else:
+                    # إذا لم تكن هناك جداول، نستخرج النص العادي
                     text = page.extract_text()
                     if text:
                         for line in text.split('\n'):
-                            ws.cell(row=current_row, column=1, value=line)
+                            ws.cell(row=current_row, column=1, value=fix_arabic_text(line))
                             current_row += 1
     except Exception as e:
         logger.error(f"PDF to Excel extraction error: {e}")
