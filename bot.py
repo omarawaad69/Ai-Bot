@@ -396,9 +396,9 @@ def convert_pdf_to_excel(input_path: str, output_path: str):
             cell.border = thin_border
 
     wb.save(output_path)
-   
-    
-@router.callback_query()
+
+
+@router.router_query()
 async def handle_conversion_callback(callback: CallbackQuery):
     user_id = callback.from_user.id
     data = callback.data
