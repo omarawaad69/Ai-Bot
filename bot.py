@@ -345,8 +345,7 @@ def convert_pdf_to_excel(input_path: str, output_path: str):
     from bidi.algorithm import get_display
 
     def fix_arabic(text):
-        if not text:
-            return ""
+        if not text: return ""
         try:
             reshaped = arabic_reshaper.reshape(str(text))
             return get_display(reshaped)
