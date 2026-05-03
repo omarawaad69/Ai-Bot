@@ -323,31 +323,7 @@ def get_conversion_keyboard():
     return keyboard
 
 def run_libreoffice(args, timeout=60):
-    """تشغيل libreoffice مع الإعدادات الصحيحة للصلاحيات. إذا كان التحويل من PDF إلى DOCX، نستخدم pdf2docx بدلاً من ذلك."""
-    # إذا كان التحويل من PDF إلى DOCX
-    if '--convert-to' in args and 'docx' in args[args.index('--convert-to') + 1]:
-        input_files = [a for a in args if os.path.exists(a) and a.lower().endswith('.pdf')]
-        if input_files:
-            input_file = input_files[0]
-            output_dir = '/tmp/'
-            if '--outdir' in args:
-                outdir_index = args.index('--outdir') + 1
-                if outdir_index < len(args):
-                    output_dir = args[outdir_index]
-            
-            base_name = os.path.splitext(os.path.basename(input_file))[0]
-            output_file = os.path.join(output_dir, f"{base_name}.docx")
-            
-            try:
-                from pdf2docx import Converter
-                cv = Converter(input_file)
-                cv.convert(output_file)
-                cv.close()
-                return None  # نجاح
-            except ImportError:
-                pass  # إذا لم تكن المكتبة موجودة، نكمل مع libreoffice
-    
-    # في جميع الحالات الأخرى، نستخدم libreoffice
+    """تشغيل libreoffice مع الإعدادات الصحيحة للصلاحيات"""
     full_args = ['libreoffice', '--headless', '-env:UserInstallation=file:///tmp/libreoffice']
     input_files = [a for a in args if os.path.exists(a) and a.lower().endswith('.pdf')]
     if input_files:
@@ -359,6 +335,58 @@ def run_libreoffice(args, timeout=60):
         capture_output=True, text=True, timeout=timeout,
         env={**os.environ, 'HOME': '/tmp', 'USERPROFILE': '/tmp'}
     )
+
+def convert_pdf_to_excel(input_path: str, output_path: str):
+    """تحويل PDF إلى Excel باستخدام pdfplumber"""
+    import pdfplumber
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "PDF Data"
+
+    try:
+        with pdfplumber.open(input_path) as pdf:
+            current_row = 1
+            for page in pdf.pages:
+                tables = page.extract_tables()
+                if tables:
+                    for table in tables:
+                        if table:
+                            for row in table:
+                                for col_idx, cell_value in enumerate(row, 1):
+                                    ws.cell(row=current_row, column=col_idx, value=cell_value)
+                                current_row += 1
+                            current_row += 1  # مسافة بين الجداول
+                else:
+                    text = page.extract_text()
+                    if text:
+                        for line in text.split('\n'):
+                            ws.cell(row=current_row, column=1, value=line)
+                            current_row += 1
+    except Exception as e:
+        logger.error(f"PDF to Excel extraction error: {e}")
+        raise
+
+    # تنسيق الخلايا
+    header_font = Font(name='Arial', size=14, bold=True, color='FFFFFF')
+    header_fill = PatternFill(start_color='2F5496', end_color='2F5496', fill_type='solid')
+    header_alignment = Alignment(horizontal='center', vertical='center')
+    cell_font = Font(name='Arial', size=12)
+    cell_alignment = Alignment(horizontal='center', vertical='center')
+    thin_border = Border(
+        left=Side(style='thin'), right=Side(style='thin'),
+        top=Side(style='thin'), bottom=Side(style='thin')
+    )
+
+    for row in ws.iter_rows(min_row=1, max_row=min(ws.max_row, 20)):
+        for cell in row:
+            cell.font = cell_font
+            cell.alignment = cell_alignment
+            cell.border = thin_border
+
+    wb.save(output_path)
 
 @router.callback_query()
 async def handle_conversion_callback(callback: CallbackQuery):
@@ -579,7 +607,12 @@ async def handle_message(message: types.Message):
                 with open(inpath, 'wb') as f:
                     f.write(pending['file_bytes'])
                 expected_out = f"/tmp/{os.path.splitext(pending['filename'])[0]}.{chosen_format}"
-                run_libreoffice(['--convert-to', chosen_format, '--outdir', '/tmp/', inpath])
+                
+                if chosen_format == 'xlsx' and inpath.lower().endswith('.pdf'):
+                    convert_pdf_to_excel(inpath, expected_out)
+                else:
+                    run_libreoffice(['--convert-to', chosen_format, '--outdir', '/tmp/', inpath])
+                
                 if os.path.exists(expected_out) and os.path.getsize(expected_out) > 100:
                     await message.reply_document(
                         FSInputFile(expected_out),
@@ -755,7 +788,12 @@ async def handle_document(message: types.Message, bot: Bot):
                 with open(inpath, 'wb') as f:
                     f.write(file_bytes.read())
                 expected_out = f"/tmp/{os.path.splitext(fname)[0]}.{target}"
-                run_libreoffice(['--convert-to', target, '--outdir', '/tmp/', inpath])
+                
+                if target == 'xlsx' and inpath.lower().endswith('.pdf'):
+                    convert_pdf_to_excel(inpath, expected_out)
+                else:
+                    run_libreoffice(['--convert-to', target, '--outdir', '/tmp/', inpath])
+                
                 if os.path.exists(expected_out) and os.path.getsize(expected_out) > 100:
                     await message.reply_document(
                         FSInputFile(expected_out),
@@ -814,7 +852,12 @@ async def handle_document(message: types.Message, bot: Bot):
             with open(inpath, 'wb') as f:
                 f.write(file_bytes.read())
             expected_out = f"/tmp/{os.path.splitext(fname)[0]}.{target}"
-            run_libreoffice(['--convert-to', target, '--outdir', '/tmp/', inpath])
+            
+            if target == 'xlsx' and inpath.lower().endswith('.pdf'):
+                convert_pdf_to_excel(inpath, expected_out)
+            else:
+                run_libreoffice(['--convert-to', target, '--outdir', '/tmp/', inpath])
+            
             if os.path.exists(expected_out) and os.path.getsize(expected_out) > 100:
                 await message.reply_document(
                     FSInputFile(expected_out),
