@@ -323,10 +323,32 @@ def get_conversion_keyboard():
     return keyboard
 
 def run_libreoffice(args, timeout=60):
-    """تشغيل libreoffice مع الإعدادات الصحيحة للصلاحيات"""
-    full_args = ['libreoffice', '--headless', '-env:UserInstallation=file:///tmp/libreoffice']
+    """تشغيل libreoffice مع الإعدادات الصحيحة للصلاحيات. إذا كان التحويل من PDF إلى DOCX، نستخدم pdf2docx بدلاً من ذلك."""
+    # إذا كان التحويل من PDF إلى DOCX
+    if '--convert-to' in args and 'docx' in args[args.index('--convert-to') + 1]:
+        input_files = [a for a in args if os.path.exists(a) and a.lower().endswith('.pdf')]
+        if input_files:
+            input_file = input_files[0]
+            output_dir = '/tmp/'
+            if '--outdir' in args:
+                outdir_index = args.index('--outdir') + 1
+                if outdir_index < len(args):
+                    output_dir = args[outdir_index]
+            
+            base_name = os.path.splitext(os.path.basename(input_file))[0]
+            output_file = os.path.join(output_dir, f"{base_name}.docx")
+            
+            try:
+                from pdf2docx import Converter
+                cv = Converter(input_file)
+                cv.convert(output_file)
+                cv.close()
+                return None  # نجاح
+            except ImportError:
+                pass  # إذا لم تكن المكتبة موجودة، نكمل مع libreoffice
     
-    # اكتشاف ما إذا كان الملف المدخل PDF وإضافة الفلتر المناسب
+    # في جميع الحالات الأخرى، نستخدم libreoffice
+    full_args = ['libreoffice', '--headless', '-env:UserInstallation=file:///tmp/libreoffice']
     input_files = [a for a in args if os.path.exists(a) and a.lower().endswith('.pdf')]
     if input_files:
         full_args.append('--infilter=writer_pdf_import')
