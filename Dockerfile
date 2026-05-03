@@ -1,6 +1,5 @@
 FROM python:3.12-slim
 
-# تثبيت الحزم الأساسية
 RUN apt-get update -y && \
     apt-get upgrade -y && \
     apt-get install -y --no-install-recommends \
@@ -15,9 +14,8 @@ RUN apt-get update -y && \
     default-jre-headless \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# تصحيح الأذونات لضمان عمل LibreOffice بدون أخطاء
 ENV HOME=/tmp
-RUN mkdir -p /tmp/.cache && chmod -R 777 /tmp
+RUN mkdir -p /tmp/libreoffice && chmod -R 777 /tmp
 
 WORKDIR /app
 
