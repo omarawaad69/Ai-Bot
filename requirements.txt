@@ -9,6 +9,5 @@ openpyxl
 aiohttp
 pdfplumber
 pandas
-spire.pdf.free
 arabic-reshaper
 python-bidi
