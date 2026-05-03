@@ -324,7 +324,14 @@ def get_conversion_keyboard():
 
 def run_libreoffice(args, timeout=60):
     """تشغيل libreoffice مع الإعدادات الصحيحة للصلاحيات"""
-    full_args = ['libreoffice', '--headless', '-env:UserInstallation=file:///tmp/libreoffice'] + args
+    full_args = ['libreoffice', '--headless', '-env:UserInstallation=file:///tmp/libreoffice']
+    
+    # اكتشاف ما إذا كان الملف المدخل PDF وإضافة الفلتر المناسب
+    input_files = [a for a in args if os.path.exists(a) and a.lower().endswith('.pdf')]
+    if input_files:
+        full_args.append('--infilter=writer_pdf_import')
+    
+    full_args.extend(args)
     return subprocess.run(
         full_args,
         capture_output=True, text=True, timeout=timeout,
