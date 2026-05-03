@@ -80,7 +80,7 @@ def update_user_activity(user: types.User):
 
 class AsyncGeminiClient:
     def __init__(self, model: str = "gemini-3.1-flash-lite-preview"):
-        self.client = genai.Client()
+PyMuPDFFself.client = genai.Client()
         self.model = model
         self.conversations = {}
 
@@ -322,10 +322,6 @@ def get_conversion_keyboard():
     ])
     return keyboard
 
-# تأكد من تثبيت PyMuPDF:
-# pip install PyMuPDF
-
-import fitz  # PyMuPDF
 
 def run_libreoffice(args, timeout=60):
     """
