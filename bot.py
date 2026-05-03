@@ -31,7 +31,7 @@ DEVELOPER_NAME = "Omar Abd El Gawaad"
 DEVELOPER_USERNAME = "@omarawad68"
 
 user_conversion_choice = {}
-user_pending_file = {}  # لتخزين الملفات المعلقة للتحويل
+user_pending_file = {}
 
 SYSTEM_PROMPT = """
 أنت "مستشار الذكاء الاصطناعي الخارق". أنت تجمع بين خبير موسوعي ومبرمج عبقري. هدفك تقديم إجابات دقيقة واحترافية في كل المجالات، مع قدرة استثنائية على البرمجة.
@@ -170,10 +170,7 @@ def create_docx_file(text: str, filepath: str):
 def create_pdf_file(text: str, filepath: str):
     docx_path = filepath.replace('.pdf', '.docx')
     create_docx_file(text, docx_path)
-    subprocess.run(['libreoffice','--headless','--convert-to','pdf',
-                    '--outdir', os.path.dirname(filepath), docx_path],
-                   check=True, timeout=30,
-                   env={**os.environ, 'HOME': '/tmp'})
+    run_libreoffice(['--convert-to', 'pdf', '--outdir', os.path.dirname(filepath), docx_path])
     os.remove(docx_path)
 
 def create_excel_file(text: str, filepath: str):
@@ -325,6 +322,15 @@ def get_conversion_keyboard():
     ])
     return keyboard
 
+def run_libreoffice(args, timeout=60):
+    """تشغيل libreoffice مع الإعدادات الصحيحة للصلاحيات"""
+    full_args = ['libreoffice', '--headless', '-env:UserInstallation=file:///tmp/libreoffice'] + args
+    return subprocess.run(
+        full_args,
+        capture_output=True, text=True, timeout=timeout,
+        env={**os.environ, 'HOME': '/tmp', 'USERPROFILE': '/tmp'}
+    )
+
 @router.callback_query()
 async def handle_conversion_callback(callback: CallbackQuery):
     user_id = callback.from_user.id
@@ -377,7 +383,7 @@ async def cmd_start(message: types.Message):
     await message.answer(
         "🎉 أهلاً بك! أنا مستشار الذكاء الاصطناعي الخارق.\n\n"
         "✨ ماذا يمكنني أن أفعل لك؟\n"
-        "- الإجابة عن أي سؤال (بما في ذلك الأحداث الجارية)\n"
+        "- الإجابة عن أي سؤال\n"
         "- كتابة وشرح الأكواد البرمجية\n"
         "- تحويل النصوص إلى Word أو PDF أو Excel\n"
         "- تحويل الملفات بين الصيغ\n"
@@ -544,12 +550,7 @@ async def handle_message(message: types.Message):
                 with open(inpath, 'wb') as f:
                     f.write(pending['file_bytes'])
                 expected_out = f"/tmp/{os.path.splitext(pending['filename'])[0]}.{chosen_format}"
-                subprocess.run(
-                    ['libreoffice', '--headless', '--convert-to', chosen_format,
-                     '--outdir', '/tmp/', inpath],
-                    capture_output=True, text=True, timeout=60,
-                    env={**os.environ, 'HOME': '/tmp'}
-                )
+                run_libreoffice(['--convert-to', chosen_format, '--outdir', '/tmp/', inpath])
                 if os.path.exists(expected_out) and os.path.getsize(expected_out) > 100:
                     await message.reply_document(
                         FSInputFile(expected_out),
@@ -725,12 +726,7 @@ async def handle_document(message: types.Message, bot: Bot):
                 with open(inpath, 'wb') as f:
                     f.write(file_bytes.read())
                 expected_out = f"/tmp/{os.path.splitext(fname)[0]}.{target}"
-                subprocess.run(
-                    ['libreoffice', '--headless', '--convert-to', target,
-                     '--outdir', '/tmp/', inpath],
-                    capture_output=True, text=True, timeout=60,
-                    env={**os.environ, 'HOME': '/tmp'}
-                )
+                run_libreoffice(['--convert-to', target, '--outdir', '/tmp/', inpath])
                 if os.path.exists(expected_out) and os.path.getsize(expected_out) > 100:
                     await message.reply_document(
                         FSInputFile(expected_out),
@@ -789,12 +785,7 @@ async def handle_document(message: types.Message, bot: Bot):
             with open(inpath, 'wb') as f:
                 f.write(file_bytes.read())
             expected_out = f"/tmp/{os.path.splitext(fname)[0]}.{target}"
-            subprocess.run(
-                ['libreoffice', '--headless', '--convert-to', target,
-                 '--outdir', '/tmp/', inpath],
-                capture_output=True, text=True, timeout=60,
-                env={**os.environ, 'HOME': '/tmp'}
-            )
+            run_libreoffice(['--convert-to', target, '--outdir', '/tmp/', inpath])
             if os.path.exists(expected_out) and os.path.getsize(expected_out) > 100:
                 await message.reply_document(
                     FSInputFile(expected_out),
