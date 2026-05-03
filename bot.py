@@ -322,13 +322,68 @@ def get_conversion_keyboard():
     ])
     return keyboard
 
+# تأكد من تثبيت PyMuPDF:
+# pip install PyMuPDF
+
+import fitz  # PyMuPDF
+
 def run_libreoffice(args, timeout=60):
-    """تشغيل libreoffice مع الإعدادات الصحيحة للصلاحيات"""
-    full_args = ['libreoffice', '--headless', '-env:UserInstallation=file:///tmp/libreoffice']
+    """
+    تحويل PDF إلى Word باستخدام PyMuPDF لاستخراج النص وبدون تنسيق.
+    """
+    # التحقق مما إذا كان التحويل مطلوبًا لملف PDF
     input_files = [a for a in args if os.path.exists(a) and a.lower().endswith('.pdf')]
-    if input_files:
-        full_args.append('--infilter=writer_pdf_import')
+    if not input_files:
+        # إذا لم يكن الملف PDF، نستخدم LibreOffice
+        return subprocess.run(
+            ['libreoffice', '--headless', '-env:UserInstallation=file:///tmp/libreoffice'] + args,
+            capture_output=True, text=True, timeout=timeout,
+            env={**os.environ, 'HOME': '/tmp', 'USERPROFILE': '/tmp'}
+        )
+
+    input_file = input_files[0]
     
+    # استخراج اسم الملف المُخرج من args (مثل 'docx')
+    convert_index = args.index('--convert-to')
+    target_format = args[convert_index + 1]
+    
+    # تحديد اسم ملف الإخراج
+    if '--outdir' in args:
+        outdir_index = args.index('--outdir') + 1
+        output_dir = args[outdir_index]
+    else:
+        output_dir = '/tmp/'
+    
+    base_name = os.path.splitext(os.path.basename(input_file))[0]
+    output_file = os.path.join(output_dir, f"{base_name}.{target_format}")
+
+    try:
+        # الخطوة 1: استخراج النص من PDF باستخدام PyMuPDF
+        doc = fitz.open(input_file)
+        text_content = ""
+        for page in doc:
+            text_content += page.get_text() + "\n"
+        doc.close()
+
+        # الخطوة 2: إنشاء ملف Word بالنص المستخرج
+        from docx import Document
+        from docx.shared import Pt
+        word_doc = Document()
+        word_doc.add_heading('مستند تم تحويله بواسطة البوت', level=1)
+        
+        for line in text_content.split('\n'):
+            if line.strip():
+                word_doc.add_paragraph(line.strip())
+        
+        word_doc.save(output_file)
+        return None  # نجاح
+
+    except Exception as e:
+        logger.error(f"PDF to Word via PyMuPDF failed: {e}")
+
+    # خطة بديلة: LibreOffice
+    full_args = ['libreoffice', '--headless', '-env:UserInstallation=file:///tmp/libreoffice']
+    full_args.append('--infilter=writer_pdf_import')
     full_args.extend(args)
     return subprocess.run(
         full_args,
@@ -336,8 +391,11 @@ def run_libreoffice(args, timeout=60):
         env={**os.environ, 'HOME': '/tmp', 'USERPROFILE': '/tmp'}
     )
 
+
 def convert_pdf_to_excel(input_path: str, output_path: str):
-    """تحويل PDF إلى Excel باستخدام pdfplumber"""
+    """
+    تحويل PDF إلى Excel مع ضبط اتجاه الورقة ليكون من اليمين لليسار.
+    """
     import pdfplumber
     from openpyxl import Workbook
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
@@ -345,6 +403,7 @@ def convert_pdf_to_excel(input_path: str, output_path: str):
     wb = Workbook()
     ws = wb.active
     ws.title = "PDF Data"
+    ws.sheet_view.rightToLeft = True  # <--- هذا هو الحل الجذري لاتجاه النص!
 
     try:
         with pdfplumber.open(input_path) as pdf:
@@ -356,9 +415,10 @@ def convert_pdf_to_excel(input_path: str, output_path: str):
                         if table:
                             for row in table:
                                 for col_idx, cell_value in enumerate(row, 1):
+                                    # نكتب النص كما هو بدون أي محاولة لتعديله
                                     ws.cell(row=current_row, column=col_idx, value=cell_value)
                                 current_row += 1
-                            current_row += 1  # مسافة بين الجداول
+                            current_row += 1
                 else:
                     text = page.extract_text()
                     if text:
