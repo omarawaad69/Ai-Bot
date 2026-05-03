@@ -80,7 +80,7 @@ def update_user_activity(user: types.User):
 
 class AsyncGeminiClient:
     def __init__(self, model: str = "gemini-3.1-flash-lite-preview"):
-PyMuPDFFself.client = genai.Client()
+        self.client = genai.Client()
         self.model = model
         self.conversations = {}
 
@@ -322,7 +322,6 @@ def get_conversion_keyboard():
     ])
     return keyboard
 
-
 def run_libreoffice(args, timeout=60):
     """
     تحويل PDF إلى Word باستخدام LibreOffice مع فلتر writer_pdf_import.
@@ -339,7 +338,6 @@ def run_libreoffice(args, timeout=60):
         capture_output=True, text=True, timeout=timeout,
         env={**os.environ, 'HOME': '/tmp', 'USERPROFILE': '/tmp'}
     )
-
 
 def convert_pdf_to_excel(input_path: str, output_path: str):
     """
@@ -397,8 +395,7 @@ def convert_pdf_to_excel(input_path: str, output_path: str):
 
     wb.save(output_path)
 
-
-@router.router_query()
+@router.callback_query()
 async def handle_conversion_callback(callback: CallbackQuery):
     user_id = callback.from_user.id
     data = callback.data
