@@ -175,6 +175,18 @@ def create_pdf_file(text: str, filepath: str):
                    check=True, timeout=30)
     os.remove(docx_path)
 
+def convert_file(input_path: str, output_path: str, target_format: str):
+    """تحويل ملف بين الصيغ باستخدام LibreOffice"""
+    output_dir = os.path.dirname(output_path)
+    os.makedirs(output_dir, exist_ok=True)
+    
+    subprocess.run(
+        ['libreoffice', '--headless', '--convert-to', target_format,
+         '--outdir', output_dir, input_path],
+        check=True, timeout=60,
+        env={**os.environ, 'HOME': '/tmp'}
+    )
+
 def create_excel_file(text: str, filepath: str):
     from openpyxl import Workbook
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
