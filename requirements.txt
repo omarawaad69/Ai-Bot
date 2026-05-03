@@ -7,8 +7,6 @@ python-docx
 SpeechRecognition
 openpyxl
 aiohttp
+PyMuPDF
 pdfplumber
 pandas
-pdf2docx
-arabic-reshaper
-python-bidi
