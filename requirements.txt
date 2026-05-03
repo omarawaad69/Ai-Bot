@@ -9,3 +9,6 @@ openpyxl
 aiohttp
 pdfplumber
 pandas
+pdf2docx
+arabic-reshaper
+python-bidi
