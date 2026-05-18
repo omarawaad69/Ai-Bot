@@ -1,3 +1,4 @@
+aiohttp
 aiogram
 google-genai
 python-dotenv
@@ -6,7 +7,7 @@ PyPDF2
 python-docx
 SpeechRecognition
 openpyxl
-aiohttp
-PyMuPDF
 pdfplumber
 pandas
+arabic-reshaper
+python-bidi
