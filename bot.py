@@ -161,16 +161,16 @@ async def generate_seedance_video(prompt, duration=5, resolution="720p", aspect_
     }
     
     payload = {
+        "model": "seedance-2.0",
         "prompt": prompt,
         "duration": duration,
         "resolution": resolution,
-        "aspect_ratio": aspect_ratio,
-        "model": "bytedance/seedance-2.0"
+        "aspect_ratio": aspect_ratio
     }
 
     async with aiohttp.ClientSession() as session:
         # 1. إرسال طلب التوليد
-        async with session.post("https://api.vercel.com/v1/video/generations", json=payload, headers=headers) as resp:
+        async with session.post("https://api.vercel.ai/v1/video/generations", json=payload, headers=headers) as resp:
             if resp.status != 200:
                 error_text = await resp.text()
                 raise Exception(f"API error {resp.status}: {error_text}")
@@ -180,7 +180,7 @@ async def generate_seedance_video(prompt, duration=5, resolution="720p", aspect_
                 raise Exception(f"Unexpected response: {data}")
 
         # 2. انتظار اكتمال التوليد
-        status_url = f"https://api.vercel.com/v1/video/generations/{generation_id}"
+        status_url = f"https://api.vercel.ai/v1/video/generations/{generation_id}"
         for attempt in range(60):  # أقصى وقت انتظار 5 دقائق
             await asyncio.sleep(5)
             async with session.get(status_url, headers=headers) as resp:
