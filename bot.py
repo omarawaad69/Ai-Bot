@@ -7,12 +7,16 @@ import sqlite3
 import subprocess
 import json
 import glob
+import aiohttp
 from io import BytesIO
 from datetime import datetime, timedelta
 from PIL import Image
 
 from aiogram import Bot, Dispatcher, Router, types, F
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import FSInputFile, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from dotenv import load_dotenv
 from google import genai
@@ -29,9 +33,14 @@ router = Router()
 ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "7361263893"))
 DEVELOPER_NAME = "Omar Abd El Gawaad"
 DEVELOPER_USERNAME = "@omarawad68"
+VERCEL_AI_KEY = os.getenv("VERCEL_AI_GATEWAY_KEY", "")
 
 user_conversion_choice = {}
 user_pending_file = {}
+
+# ==================== حالات توليد الفيديو ====================
+class VideoGen(StatesGroup):
+    waiting_for_prompt = State()
 
 SYSTEM_PROMPT = """
 أنت "مستشار الذكاء الاصطناعي الخارق". أنت تجمع بين خبير موسوعي ومبرمج عبقري. هدفك تقديم إجابات دقيقة واحترافية في كل المجالات، مع قدرة استثنائية على البرمجة.
@@ -92,10 +101,7 @@ class AsyncGeminiClient:
         if user_id not in self.conversations:
             self.conversations[user_id] = []
         
-        self.conversations[user_id].append({
-            "role": "user",
-            "parts": [{"text": prompt}]
-        })
+        self.conversations[user_id].append({"role": "user", "parts": [{"text": prompt}]})
         
         if len(self.conversations[user_id]) > 15:
             self.conversations[user_id] = self.conversations[user_id][-15:]
@@ -109,24 +115,16 @@ class AsyncGeminiClient:
         for attempt in range(3):
             try:
                 response = self.client.models.generate_content(
-                    model=self.model,
-                    contents=full_context,
+                    model=self.model, contents=full_context,
                     config=genai_types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT))
                 
                 reply = response.text
-                
-                self.conversations[user_id].append({
-                    "role": "model",
-                    "parts": [{"text": reply}]
-                })
-                
+                self.conversations[user_id].append({"role": "model", "parts": [{"text": reply}]})
                 return reply
             except Exception as e:
                 logger.error(f"Gemini error (attempt {attempt+1}): {e}")
-                if attempt < 2:
-                    time.sleep(1)
-                else:
-                    return "عذراً، حدث خطأ مؤقت."
+                if attempt < 2: time.sleep(1)
+                else: return "عذراً، حدث خطأ مؤقت."
 
     async def generate_with_media(self, prompt: str, media_parts: list) -> str:
         loop = asyncio.get_event_loop()
@@ -146,6 +144,101 @@ class AsyncGeminiClient:
                 else: return "عذراً، حدث خطأ مؤقت."
 
 gemini_client = AsyncGeminiClient()
+
+# ==================== دوال تحسين وتوليد الفيديو ====================
+def enhance_prompt(user_text):
+    """تحسين وصف الفيديو ليعطي نتائج احترافية"""
+    return f"{user_text}, cinematic, 8k resolution, photorealistic, highly detailed, dramatic lighting, professional color grading, smooth motion"
+
+async def generate_seedance_video(prompt, duration=5, resolution="720p", aspect_ratio="16:9"):
+    """توليد الفيديو باستخدام Seedance 2.0 عبر Vercel AI Gateway"""
+    if not VERCEL_AI_KEY:
+        raise ValueError("VERCEL_AI_GATEWAY_KEY not set")
+
+    headers = {
+        "Authorization": f"Bearer {VERCEL_AI_KEY}",
+        "Content-Type": "application/json"
+    }
+    
+    payload = {
+        "prompt": prompt,
+        "duration": duration,
+        "resolution": resolution,
+        "aspect_ratio": aspect_ratio,
+        "model": "bytedance/seedance-2.0"
+    }
+
+    async with aiohttp.ClientSession() as session:
+        # 1. إرسال طلب التوليد
+        async with session.post("https://api.vercel.com/v1/video/generations", json=payload, headers=headers) as resp:
+            if resp.status != 200:
+                error_text = await resp.text()
+                raise Exception(f"API error {resp.status}: {error_text}")
+            data = await resp.json()
+            generation_id = data.get("id")
+            if not generation_id:
+                raise Exception(f"Unexpected response: {data}")
+
+        # 2. انتظار اكتمال التوليد
+        status_url = f"https://api.vercel.com/v1/video/generations/{generation_id}"
+        for attempt in range(60):  # أقصى وقت انتظار 5 دقائق
+            await asyncio.sleep(5)
+            async with session.get(status_url, headers=headers) as resp:
+                if resp.status != 200:
+                    continue
+                status_data = await resp.json()
+                if status_data.get("status") == "completed":
+                    return status_data.get("video_url")
+                elif status_data.get("status") == "failed":
+                    raise Exception("Video generation failed")
+
+        raise TimeoutError("Video generation timed out")
+
+# ==================== معالج توليد الفيديو ====================
+@router.message(StateFilter(None), F.text == "🎬 توليد فيديو")
+async def start_video_gen(message: types.Message, state: FSMContext):
+    update_user_activity(message.from_user)
+    await message.answer(
+        "🎬 أرسل لي وصفاً دقيقاً للفيديو الذي تريد توليده.\n\n"
+        "📝 *مثال:* جولة جوية فوق مدينة دبي ليلاً مع إضاءة ساحرة",
+        parse_mode="Markdown"
+    )
+    await state.set_state(VideoGen.waiting_for_prompt)
+
+@router.message(VideoGen.waiting_for_prompt)
+async def process_video_prompt(message: types.Message, state: FSMContext):
+    update_user_activity(message.from_user)
+    user_prompt = message.text
+
+    await message.answer("🎥 جاري تحسين الوصف وتوليد الفيديو... قد يستغرق هذا بعض الوقت ⏳")
+
+    try:
+        # 1. تحسين الوصف
+        enhanced = enhance_prompt(user_prompt)
+        logger.info(f"Enhanced prompt: {enhanced}")
+
+        # 2. توليد الفيديو
+        video_url = await generate_seedance_video(enhanced)
+
+        # 3. تحميل الفيديو وإرساله
+        async with aiohttp.ClientSession() as session:
+            async with session.get(video_url) as resp:
+                if resp.status == 200:
+                    video_data = await resp.read()
+                    video_file = BytesIO(video_data)
+                    video_file.name = "video.mp4"
+                    await message.answer_video(
+                        video=FSInputFile(video_file),
+                        caption=f"🎬 *تم توليد الفيديو بنجاح!*\n\n📝 الوصف: {user_prompt}",
+                        parse_mode="Markdown"
+                    )
+                else:
+                    await message.answer(f"❌ فشل تحميل الفيديو. الرابط: {video_url}")
+    except Exception as e:
+        logger.error(f"Video generation error: {e}")
+        await message.answer(f"❌ حدث خطأ أثناء توليد الفيديو: {str(e)}")
+
+    await state.clear()
 
 def convert_image_to_png(image_bytes: bytes):
     try:
@@ -196,10 +289,7 @@ def create_excel_file(text: str, filepath: str):
         header_alignment = Alignment(horizontal='center', vertical='center')
         cell_font = Font(name='Arial', size=12)
         cell_alignment = Alignment(horizontal='center', vertical='center')
-        thin_border = Border(
-            left=Side(style='thin'), right=Side(style='thin'),
-            top=Side(style='thin'), bottom=Side(style='thin')
-        )
+        thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
         
         if headers:
             ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(headers))
@@ -231,8 +321,7 @@ def create_excel_file(text: str, filepath: str):
                 try:
                     if len(str(cell.value)) > max_length:
                         max_length = len(str(cell.value))
-                except:
-                    pass
+                except: pass
             adjusted_width = min(max_length + 4, 50)
             ws.column_dimensions[column_letter].width = adjusted_width
         
@@ -322,88 +411,39 @@ def get_conversion_keyboard():
     ])
     return keyboard
 
-# تأكد من تثبيت PyMuPDF:
-# pip install PyMuPDF
-
-import fitz  # PyMuPDF
-
 def run_libreoffice(args, timeout=60):
-    """
-    تحويل PDF إلى Word باستخدام PyMuPDF لاستخراج النص وبدون تنسيق.
-    """
-    # التحقق مما إذا كان التحويل مطلوبًا لملف PDF
-    input_files = [a for a in args if os.path.exists(a) and a.lower().endswith('.pdf')]
-    if not input_files:
-        # إذا لم يكن الملف PDF، نستخدم LibreOffice
-        return subprocess.run(
-            ['libreoffice', '--headless', '-env:UserInstallation=file:///tmp/libreoffice'] + args,
-            capture_output=True, text=True, timeout=timeout,
-            env={**os.environ, 'HOME': '/tmp', 'USERPROFILE': '/tmp'}
-        )
-
-    input_file = input_files[0]
-    
-    # استخراج اسم الملف المُخرج من args (مثل 'docx')
-    convert_index = args.index('--convert-to')
-    target_format = args[convert_index + 1]
-    
-    # تحديد اسم ملف الإخراج
-    if '--outdir' in args:
-        outdir_index = args.index('--outdir') + 1
-        output_dir = args[outdir_index]
-    else:
-        output_dir = '/tmp/'
-    
-    base_name = os.path.splitext(os.path.basename(input_file))[0]
-    output_file = os.path.join(output_dir, f"{base_name}.{target_format}")
-
-    try:
-        # الخطوة 1: استخراج النص من PDF باستخدام PyMuPDF
-        doc = fitz.open(input_file)
-        text_content = ""
-        for page in doc:
-            text_content += page.get_text() + "\n"
-        doc.close()
-
-        # الخطوة 2: إنشاء ملف Word بالنص المستخرج
-        from docx import Document
-        from docx.shared import Pt
-        word_doc = Document()
-        word_doc.add_heading('مستند تم تحويله بواسطة البوت', level=1)
-        
-        for line in text_content.split('\n'):
-            if line.strip():
-                word_doc.add_paragraph(line.strip())
-        
-        word_doc.save(output_file)
-        return None  # نجاح
-
-    except Exception as e:
-        logger.error(f"PDF to Word via PyMuPDF failed: {e}")
-
-    # خطة بديلة: LibreOffice
+    """تشغيل libreoffice مع الإعدادات الصحيحة للصلاحيات"""
     full_args = ['libreoffice', '--headless', '-env:UserInstallation=file:///tmp/libreoffice']
-    full_args.append('--infilter=writer_pdf_import')
+    input_files = [a for a in args if os.path.exists(a) and a.lower().endswith('.pdf')]
+    if input_files:
+        full_args.append('--infilter="writer_pdf_import"')
+    
     full_args.extend(args)
     return subprocess.run(
-        full_args,
-        capture_output=True, text=True, timeout=timeout,
+        full_args, capture_output=True, text=True, timeout=timeout,
         env={**os.environ, 'HOME': '/tmp', 'USERPROFILE': '/tmp'}
     )
 
-
 def convert_pdf_to_excel(input_path: str, output_path: str):
-    """
-    تحويل PDF إلى Excel مع ضبط اتجاه الورقة ليكون من اليمين لليسار.
-    """
+    """تحويل PDF إلى Excel مع معالجة النص العربي"""
     import pdfplumber
     from openpyxl import Workbook
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+    import arabic_reshaper
+    from bidi.algorithm import get_display
+
+    def fix_arabic(text):
+        if not text: return ""
+        try:
+            reshaped = arabic_reshaper.reshape(str(text))
+            return get_display(reshaped)
+        except:
+            return str(text)
 
     wb = Workbook()
     ws = wb.active
     ws.title = "PDF Data"
-    ws.sheet_view.rightToLeft = True  # <--- هذا هو الحل الجذري لاتجاه النص!
+    ws.sheet_view.rightToLeft = True
 
     try:
         with pdfplumber.open(input_path) as pdf:
@@ -415,36 +455,23 @@ def convert_pdf_to_excel(input_path: str, output_path: str):
                         if table:
                             for row in table:
                                 for col_idx, cell_value in enumerate(row, 1):
-                                    # نكتب النص كما هو بدون أي محاولة لتعديله
-                                    ws.cell(row=current_row, column=col_idx, value=cell_value)
+                                    ws.cell(row=current_row, column=col_idx, value=fix_arabic(cell_value))
                                 current_row += 1
                             current_row += 1
                 else:
                     text = page.extract_text()
                     if text:
                         for line in text.split('\n'):
-                            ws.cell(row=current_row, column=1, value=line)
+                            ws.cell(row=current_row, column=1, value=fix_arabic(line))
                             current_row += 1
     except Exception as e:
         logger.error(f"PDF to Excel extraction error: {e}")
-        raise
-
-    # تنسيق الخلايا
-    header_font = Font(name='Arial', size=14, bold=True, color='FFFFFF')
-    header_fill = PatternFill(start_color='2F5496', end_color='2F5496', fill_type='solid')
-    header_alignment = Alignment(horizontal='center', vertical='center')
-    cell_font = Font(name='Arial', size=12)
-    cell_alignment = Alignment(horizontal='center', vertical='center')
-    thin_border = Border(
-        left=Side(style='thin'), right=Side(style='thin'),
-        top=Side(style='thin'), bottom=Side(style='thin')
-    )
 
     for row in ws.iter_rows(min_row=1, max_row=min(ws.max_row, 20)):
         for cell in row:
-            cell.font = cell_font
-            cell.alignment = cell_alignment
-            cell.border = thin_border
+            cell.font = Font(name='Arial', size=12)
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+            cell.border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
 
     wb.save(output_path)
 
@@ -464,20 +491,15 @@ async def handle_conversion_callback(callback: CallbackQuery):
     
     if data == "convert_any":
         user_conversion_choice[user_id] = ("any", None, "أي صيغة لأي صيغة")
-        await callback.message.answer(
-            "📁 *أرسل الملف الذي تريد تحويله*",
-            parse_mode="Markdown"
-        )
+        await callback.message.answer("📁 *أرسل الملف الذي تريد تحويله*", parse_mode="Markdown")
         await callback.answer("تم")
         return
     
     if data in conversion_map:
         source, target, label = conversion_map[data]
         user_conversion_choice[user_id] = (source, target, label)
-        
         await callback.message.answer(
-            f"📁 *{label}*\n\n"
-            f"أرسل ملف *{source.upper()}* ليتم تحويله إلى *{target.upper()}*",
+            f"📁 *{label}*\n\nأرسل ملف *{source.upper()}* ليتم تحويله إلى *{target.upper()}*",
             parse_mode="Markdown"
         )
         await callback.answer("تم")
@@ -491,7 +513,8 @@ async def cmd_start(message: types.Message):
             [KeyboardButton(text="💬 ابدأ محادثة"), KeyboardButton(text="🖼️ تحليل صورة")],
             [KeyboardButton(text="📄 تحويل نص لملف"), KeyboardButton(text="📊 تحويل لإكسيل")],
             [KeyboardButton(text="🎤 إرسال صوت"), KeyboardButton(text="🌐 ترجمة فورية")],
-            [KeyboardButton(text="🔄 تحويل ملفات"), KeyboardButton(text="👨‍💻 تواصل مع المبرمج")]
+            [KeyboardButton(text="🔄 تحويل ملفات"), KeyboardButton(text="👨‍💻 تواصل مع المبرمج")],
+            [KeyboardButton(text="🎬 توليد فيديو")]
         ],
         resize_keyboard=True,
         input_field_placeholder="اختر من القائمة..."
@@ -507,7 +530,8 @@ async def cmd_start(message: types.Message):
         "- تحليل الصور والمستندات\n"
         "- الاستماع إلى الرسائل الصوتية\n"
         "- الترجمة الفورية لأي لغة\n"
-        "- تصميم برومبت احترافي للصور\n\n"
+        "- 🎨 تصميم برومبت احترافي للصور\n"
+        "- 🎬 توليد فيديو احترافي بالذكاء الاصطناعي\n\n"
         "💬 تحدث معي طبيعياً وسأفهمك!\n\n"
         "━━━━━━━━━━━━━━━━━━\n"
         f"👨‍💻 المبرمج: {DEVELOPER_NAME}\n"
@@ -518,49 +542,38 @@ async def cmd_start(message: types.Message):
 @router.message(Command("admin"))
 async def cmd_admin(message: types.Message):
     update_user_activity(message.from_user)
-    
     if message.from_user.id != ADMIN_USER_ID:
         await message.answer("⛔ عذراً، هذا الأمر متاح فقط لمالك البوت.")
         return
     
     conn = sqlite3.connect('bot_stats.db')
     cursor = conn.cursor()
-    
     cursor.execute('SELECT COUNT(*) FROM users')
     total_users = cursor.fetchone()[0]
-    
     today = datetime.now().strftime("%Y-%m-%d")
     cursor.execute('SELECT active_users, total_messages FROM daily_stats WHERE date=?', (today,))
     today_stats = cursor.fetchone() or (0, 0)
-    
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     cursor.execute('SELECT active_users, total_messages FROM daily_stats WHERE date=?', (yesterday,))
     yesterday_stats = cursor.fetchone() or (0, 0)
-    
     cursor.execute('SELECT SUM(total_messages) FROM daily_stats')
     total_messages_all_time = cursor.fetchone()[0] or 0
-    
     one_day_ago = (datetime.now() - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
     cursor.execute('SELECT COUNT(*) FROM users WHERE last_active >= ?', (one_day_ago,))
     online_users = cursor.fetchone()[0]
-    
     offline_users = total_users - online_users
-    
     cursor.execute('SELECT username, first_name, last_active FROM users ORDER BY last_active DESC LIMIT 5')
     recent_users = cursor.fetchall()
-    
     conn.close()
     
     stats_message = (
         "📊 *لوحة الإحصائيات*\n\n"
         f"👥 إجمالي المستخدمين: {total_users}\n"
-        f"🟢 متصل: {online_users}\n"
-        f"🔴 غير متصل: {offline_users}\n\n"
+        f"🟢 متصل: {online_users}\n🔴 غير متصل: {offline_users}\n\n"
         f"📅 اليوم: {today_stats[0]} نشط | {today_stats[1]} رسالة\n"
         f"📆 أمس: {yesterday_stats[0]} نشط | {yesterday_stats[1]} رسالة\n\n"
         f"💬 إجمالي الرسائل: {total_messages_all_time}"
     )
-    
     await message.answer(stats_message, parse_mode="Markdown")
 
 @router.message(Command("reset"))
@@ -575,19 +588,18 @@ async def cmd_translate(message: types.Message):
     await message.answer(
         "🌐 *الترجمة الفورية*\n\n"
         "يمكنك الترجمة بطريقتين:\n\n"
-        "1️⃣ *أرسل النص بهذا الشكل:*\n"
-        "`ترجم إلى الفرنسية: مرحباً، كيف حالك؟`\n\n"
-        "2️⃣ *أرسل رسالة صوتية:*\n"
-        "سأحولها إلى نص ثم أترجمها لك.\n\n"
-        "📝 *مثال للأوامر:*\n"
-        "- ترجم إلى الإنجليزية: النص\n"
-        "- ترجم إلى الإسبانية: النص\n"
-        "- ترجم إلى الألمانية: النص",
+        "1️⃣ *أرسل النص بهذا الشكل:*\n`ترجم إلى الفرنسية: مرحباً، كيف حالك؟`\n\n"
+        "2️⃣ *أرسل رسالة صوتية:*\nسأحولها إلى نص ثم أترجمها لك.\n\n"
+        "📝 *مثال:*\n- ترجم إلى الإنجليزية: النص\n- ترجم إلى الإسبانية: النص\n- ترجم إلى الألمانية: النص",
         parse_mode="Markdown"
     )
 
-@router.message(F.text.in_({"💬 ابدأ محادثة", "🖼️ تحليل صورة", "📄 تحويل نص لملف", "📊 تحويل لإكسيل", "🎤 إرسال صوت", "👨‍💻 تواصل مع المبرمج", "🔄 تحويل ملفات", "🌐 ترجمة فورية"}))
-async def handle_buttons(message: types.Message):
+@router.message(F.text.in_({
+    "💬 ابدأ محادثة", "🖼️ تحليل صورة", "📄 تحويل نص لملف", "📊 تحويل لإكسيل",
+    "🎤 إرسال صوت", "👨‍💻 تواصل مع المبرمج", "🔄 تحويل ملفات", "🌐 ترجمة فورية",
+    "🎬 توليد فيديو"
+}))
+async def handle_buttons(message: types.Message, state: FSMContext):
     update_user_activity(message.from_user)
     
     if message.text == "💬 ابدأ محادثة":
@@ -631,27 +643,68 @@ async def handle_buttons(message: types.Message):
         await message.answer(
             "🌐 *الترجمة الفورية*\n\n"
             "يمكنك الترجمة بطريقتين:\n\n"
-            "1️⃣ *أرسل النص بهذا الشكل:*\n"
-            "`ترجم إلى الفرنسية: مرحباً، كيف حالك؟`\n\n"
-            "2️⃣ *أرسل رسالة صوتية:*\n"
-            "سأحولها إلى نص ثم أترجمها لك.\n\n"
-            "📝 *مثال للأوامر:*\n"
-            "- ترجم إلى الإنجليزية: النص\n"
-            "- ترجم إلى الإسبانية: النص\n"
-            "- ترجم إلى الألمانية: النص",
+            "1️⃣ *أرسل النص بهذا الشكل:*\n`ترجم إلى الفرنسية: مرحباً، كيف حالك؟`\n\n"
+            "2️⃣ *أرسل رسالة صوتية:*\nسأحولها إلى نص ثم أترجمها لك.\n\n"
+            "📝 *مثال:*\n- ترجم إلى الإنجليزية: النص\n- ترجم إلى الإسبانية: النص\n- ترجم إلى الألمانية: النص",
             parse_mode="Markdown"
         )
+    elif message.text == "🎬 توليد فيديو":
+        await state.clear()
+        await message.answer(
+            "🎬 أرسل لي وصفاً دقيقاً للفيديو الذي تريد توليده.\n\n"
+            "📝 *مثال:* جولة جوية فوق مدينة دبي ليلاً مع إضاءة ساحرة",
+            parse_mode="Markdown"
+        )
+        await state.set_state(VideoGen.waiting_for_prompt)
+
+@router.message(VideoGen.waiting_for_prompt)
+async def process_video_prompt(message: types.Message, state: FSMContext):
+    update_user_activity(message.from_user)
+    user_prompt = message.text
+
+    await message.answer("🎥 جاري تحسين الوصف وتوليد الفيديو... قد يستغرق هذا بعض الوقت ⏳")
+
+    try:
+        # 1. تحسين الوصف
+        enhanced = enhance_prompt(user_prompt)
+        logger.info(f"Enhanced prompt: {enhanced}")
+
+        # 2. توليد الفيديو
+        video_url = await generate_seedance_video(enhanced)
+
+        # 3. تحميل الفيديو وإرساله
+        async with aiohttp.ClientSession() as session:
+            async with session.get(video_url) as resp:
+                if resp.status == 200:
+                    video_data = await resp.read()
+                    video_file = BytesIO(video_data)
+                    video_file.name = "video.mp4"
+                    await message.answer_video(
+                        video=FSInputFile(video_file),
+                        caption=f"🎬 *تم توليد الفيديو بنجاح!*\n\n📝 الوصف: {user_prompt}",
+                        parse_mode="Markdown"
+                    )
+                else:
+                    await message.answer(f"❌ فشل تحميل الفيديو. الرابط: {video_url}")
+    except Exception as e:
+        logger.error(f"Video generation error: {e}")
+        await message.answer(f"❌ حدث خطأ أثناء توليد الفيديو: {str(e)}")
+
+    await state.clear()
 
 @router.message(F.text)
-async def handle_message(message: types.Message):
+async def handle_message(message: types.Message, state: FSMContext):
     update_user_activity(message.from_user)
     user_text = message.text
     text_lower = user_text.lower()
 
-    if user_text in ["💬 ابدأ محادثة", "🖼️ تحليل صورة", "📄 تحويل نص لملف", "📊 تحويل لإكسيل", "🎤 إرسال صوت", "👨‍💻 تواصل مع المبرمج", "🔄 تحويل ملفات", "🌐 ترجمة فورية"]:
+    if user_text in [
+        "💬 ابدأ محادثة", "🖼️ تحليل صورة", "📄 تحويل نص لملف", "📊 تحويل لإكسيل",
+        "🎤 إرسال صوت", "👨‍💻 تواصل مع المبرمج", "🔄 تحويل ملفات", "🌐 ترجمة فورية",
+        "🎬 توليد فيديو"
+    ]:
         return
 
-    # ==================== التحقق من الملفات المعلقة ====================
     user_id = message.from_user.id
     if user_id in user_pending_file:
         chosen_format = None
@@ -674,19 +727,13 @@ async def handle_message(message: types.Message):
                     run_libreoffice(['--convert-to', chosen_format, '--outdir', '/tmp/', inpath])
                 
                 if os.path.exists(expected_out) and os.path.getsize(expected_out) > 100:
-                    await message.reply_document(
-                        FSInputFile(expected_out),
-                        caption=f"✅ تم التحويل إلى {chosen_format.upper()}"
-                    )
+                    await message.reply_document(FSInputFile(expected_out), caption=f"✅ تم التحويل إلى {chosen_format.upper()}")
                 else:
                     possible_files = glob.glob(f"/tmp/*.{chosen_format}")
                     found = False
                     for pf in possible_files:
                         if os.path.getsize(pf) > 100:
-                            await message.reply_document(
-                                FSInputFile(pf),
-                                caption=f"✅ تم التحويل إلى {chosen_format.upper()}"
-                            )
+                            await message.reply_document(FSInputFile(pf), caption=f"✅ تم التحويل إلى {chosen_format.upper()}")
                             os.remove(pf)
                             found = True
                             break
@@ -701,12 +748,9 @@ async def handle_message(message: types.Message):
 
     intent, content = detect_conversion_intent(user_text)
     
-    if intent == "EXCEL_NEED_TEXT":
-        return await message.reply("📊 ما هو النص الذي تريد تحويله إلى ملف Excel؟")
-    if intent == "WORD_NEED_TEXT":
-        return await message.reply("📝 ما هو النص الذي تريد تحويله إلى ملف Word؟")
-    if intent == "PDF_NEED_TEXT":
-        return await message.reply("📕 ما هو النص الذي تريد تحويله إلى ملف PDF؟")
+    if intent == "EXCEL_NEED_TEXT": return await message.reply("📊 ما هو النص الذي تريد تحويله إلى ملف Excel؟")
+    if intent == "WORD_NEED_TEXT": return await message.reply("📝 ما هو النص الذي تريد تحويله إلى ملف Word؟")
+    if intent == "PDF_NEED_TEXT": return await message.reply("📕 ما هو النص الذي تريد تحويله إلى ملف PDF؟")
     
     if intent == "excel" and content:
         await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
@@ -756,7 +800,6 @@ async def handle_message(message: types.Message):
         اكتب فقط نص الأمر (البرومبت) بدون أي مقدمات أو شرح إضافي."""
         
         generated_prompt = await gemini_client.generate(prompt_request, str(message.from_user.id))
-        
         final_response = f"🎨 *تم تصميم برومبت احترافي لطلبك:*\n\n`{generated_prompt}`\n\n🖼️ يمكنك نسخ هذا النص ولصقه في أي أداة لتوليد الصور بالذكاء الاصطناعي."
         await message.reply(final_response, parse_mode="Markdown")
         return
@@ -773,7 +816,6 @@ async def handle_message(message: types.Message):
             if trigger in text_lower:
                 idx = text_lower.find(trigger)
                 rest = user_text[idx + len(trigger):].strip()
-                
                 if ':' in rest:
                     target_lang, text_to_translate = rest.split(':', 1)
                     target_lang = target_lang.strip()
@@ -784,10 +826,8 @@ async def handle_message(message: types.Message):
         
         if target_lang and text_to_translate:
             await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
-            
             prompt = f"ترجم النص التالي إلى {target_lang}. أرسل الترجمة فقط بدون أي كلام إضافي:\n\n{text_to_translate}"
             translation = await gemini_client.generate(prompt, str(message.from_user.id))
-            
             await message.answer(f"🌐 *الترجمة إلى {target_lang}:*\n\n{translation}", parse_mode="Markdown")
             return
         elif target_lang:
@@ -812,9 +852,7 @@ async def handle_photo(message: types.Message, bot: Bot):
         img_bytes, mime = convert_image_to_png(bio.read())
         b64 = base64.b64encode(img_bytes).decode()
         caption = message.caption or "حلل هذه الصورة"
-        resp = await gemini_client.generate_with_media(caption, [
-            {"inline_data": {"mime_type": mime, "data": b64}}
-        ])
+        resp = await gemini_client.generate_with_media(caption, [{"inline_data": {"mime_type": mime, "data": b64}}])
         for i in range(0, len(resp), 4000):
             await message.reply(resp[i:i+4000])
     except Exception as e:
@@ -830,7 +868,6 @@ async def handle_document(message: types.Message, bot: Bot):
     cap = message.caption or ""
     user_id = message.from_user.id
     
-    # التحقق مما إذا كان المستخدم قد اختار "any" (أي صيغة لأي صيغة)
     if user_id in user_conversion_choice and user_conversion_choice[user_id][0] == "any":
         target = None
         if cap:
@@ -845,8 +882,7 @@ async def handle_document(message: types.Message, bot: Bot):
                 file_info = await bot.get_file(doc.file_id)
                 file_bytes = await bot.download_file(file_info.file_path)
                 inpath = f"/tmp/{user_id}_{fname}"
-                with open(inpath, 'wb') as f:
-                    f.write(file_bytes.read())
+                with open(inpath, 'wb') as f: f.write(file_bytes.read())
                 expected_out = f"/tmp/{os.path.splitext(fname)[0]}.{target}"
                 
                 if target == 'xlsx' and inpath.lower().endswith('.pdf'):
@@ -855,40 +891,28 @@ async def handle_document(message: types.Message, bot: Bot):
                     run_libreoffice(['--convert-to', target, '--outdir', '/tmp/', inpath])
                 
                 if os.path.exists(expected_out) and os.path.getsize(expected_out) > 100:
-                    await message.reply_document(
-                        FSInputFile(expected_out),
-                        caption=f"✅ تم التحويل إلى {target.upper()}"
-                    )
+                    await message.reply_document(FSInputFile(expected_out), caption=f"✅ تم التحويل إلى {target.upper()}")
                 else:
                     possible_files = glob.glob(f"/tmp/*.{target}")
                     found = False
                     for pf in possible_files:
                         if os.path.getsize(pf) > 100:
-                            await message.reply_document(
-                                FSInputFile(pf),
-                                caption=f"✅ تم التحويل إلى {target.upper()}"
-                            )
+                            await message.reply_document(FSInputFile(pf), caption=f"✅ تم التحويل إلى {target.upper()}")
                             os.remove(pf)
                             found = True
                             break
-                    if not found:
-                        await message.reply("❌ فشل التحويل.")
+                    if not found: await message.reply("❌ فشل التحويل.")
                 if os.path.exists(inpath): os.remove(inpath)
                 if os.path.exists(expected_out): os.remove(expected_out)
             except Exception as e:
                 logger.error(f"Convert error: {e}")
                 await message.reply("❌ حدث خطأ أثناء التحويل.")
-            if user_id in user_conversion_choice:
-                del user_conversion_choice[user_id]
+            if user_id in user_conversion_choice: del user_conversion_choice[user_id]
             return
         else:
-            # تخزين الملف مؤقتاً وانتظار اختيار الصيغة
             file_info = await bot.get_file(doc.file_id)
             file_bytes = await bot.download_file(file_info.file_path)
-            user_pending_file[user_id] = {
-                'file_bytes': file_bytes.read(),
-                'filename': fname
-            }
+            user_pending_file[user_id] = {'file_bytes': file_bytes.read(), 'filename': fname}
             await message.reply("📝 *إلى أي صيغة تريد التحويل؟*\n• pdf\n• word\n• excel", parse_mode="Markdown")
             return
     
@@ -909,8 +933,7 @@ async def handle_document(message: types.Message, bot: Bot):
             file_info = await bot.get_file(doc.file_id)
             file_bytes = await bot.download_file(file_info.file_path)
             inpath = f"/tmp/{user_id}_{fname}"
-            with open(inpath, 'wb') as f:
-                f.write(file_bytes.read())
+            with open(inpath, 'wb') as f: f.write(file_bytes.read())
             expected_out = f"/tmp/{os.path.splitext(fname)[0]}.{target}"
             
             if target == 'xlsx' and inpath.lower().endswith('.pdf'):
@@ -919,24 +942,17 @@ async def handle_document(message: types.Message, bot: Bot):
                 run_libreoffice(['--convert-to', target, '--outdir', '/tmp/', inpath])
             
             if os.path.exists(expected_out) and os.path.getsize(expected_out) > 100:
-                await message.reply_document(
-                    FSInputFile(expected_out),
-                    caption=f"✅ تم التحويل إلى {target.upper()}"
-                )
+                await message.reply_document(FSInputFile(expected_out), caption=f"✅ تم التحويل إلى {target.upper()}")
             else:
                 possible_files = glob.glob(f"/tmp/*.{target}")
                 found = False
                 for pf in possible_files:
                     if os.path.getsize(pf) > 100:
-                        await message.reply_document(
-                            FSInputFile(pf),
-                            caption=f"✅ تم التحويل إلى {target.upper()}"
-                        )
+                        await message.reply_document(FSInputFile(pf), caption=f"✅ تم التحويل إلى {target.upper()}")
                         os.remove(pf)
                         found = True
                         break
-                if not found:
-                    await message.reply("❌ فشل التحويل.")
+                if not found: await message.reply("❌ فشل التحويل.")
             if os.path.exists(inpath): os.remove(inpath)
             if os.path.exists(expected_out): os.remove(expected_out)
         except Exception as e:
@@ -969,8 +985,7 @@ async def handle_document(message: types.Message, bot: Bot):
         elif mime == "application/pdf":
             import PyPDF2
             r = PyPDF2.PdfReader(BytesIO(fb))
-            for p in r.pages:
-                text += p.extract_text() or ""
+            for p in r.pages: text += p.extract_text() or ""
         elif "word" in mime:
             import docx as dx
             dxf = dx.Document(BytesIO(fb))
@@ -1006,15 +1021,11 @@ async def handle_voice(message: types.Message, bot: Bot):
         await bot.download_file(file_info.file_path, bio)
         bio.seek(0)
         
-        with open(ogg_path, "wb") as f:
-            f.write(bio.read())
+        with open(ogg_path, "wb") as f: f.write(bio.read())
         bio.close()
         
         try:
-            subprocess.run(
-                ['ffmpeg', '-i', ogg_path, '-ar', '16000', '-ac', '1', wav_path],
-                check=True, capture_output=True, timeout=30
-            )
+            subprocess.run(['ffmpeg', '-i', ogg_path, '-ar', '16000', '-ac', '1', wav_path], check=True, capture_output=True, timeout=30)
             logger.info("Audio converted to WAV")
         except Exception as e:
             logger.error(f"ffmpeg error: {e}")
@@ -1032,8 +1043,7 @@ async def handle_voice(message: types.Message, bot: Bot):
             try:
                 text = recognizer.recognize_google(audio, language=lang) if lang else recognizer.recognize_google(audio)
                 if text: break
-            except sr.UnknownValueError:
-                continue
+            except sr.UnknownValueError: continue
             except sr.RequestError as e:
                 logger.error(f"Google API error: {e}")
                 await message.reply("⚠️ خدمة التعرف على الصوت غير متاحة حالياً.")
@@ -1067,11 +1077,7 @@ async def handle_web_chat(request):
             return web.json_response({'status': 'error', 'message': 'نص فارغ'})
         
         response = await gemini_client.generate(user_text, user_id)
-        
-        return web.json_response({
-            'status': 'success',
-            'response': response
-        })
+        return web.json_response({'status': 'success', 'response': response})
     except Exception as e:
         logger.error(f"Web chat error: {e}")
         return web.json_response({'status': 'error', 'message': 'حدث خطأ'})
@@ -1079,7 +1085,6 @@ async def handle_web_chat(request):
 async def init_web_server():
     app = web.Application()
     app.router.add_post('/api/chat', handle_web_chat)
-    
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', 8000)
@@ -1089,7 +1094,10 @@ async def init_web_server():
 async def main():
     init_db()
     bot = Bot(token=os.getenv("TELEGRAM_BOT_TOKEN"))
-    dp = Dispatcher()
+    
+    # استخدام MemoryStorage لتجنب تعارضات الحالات
+    storage = MemoryStorage()
+    dp = Dispatcher(storage=storage)
     dp.include_router(router)
     
     await init_web_server()
