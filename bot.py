@@ -81,17 +81,15 @@ def update_user_activity(user: types.User):
     except Exception as e:
         logger.error(f"User activity error: {e}")
 
-from google.genai import types
-
 class AsyncGeminiClient:
     def __init__(self, model: str = "gemini-2.0-flash-lite"):
-        # إنشاء العميل مع خيارات إعادة المحاولة
+        # إنشاء العميل مع خيارات إعادة المحاولة التلقائية لمواجهة الأخطاء المؤقتة (429, 503, etc.)
         self.client = genai.Client(
-            http_options=types.HttpOptions(
-                retry_options=types.HttpRetryOptions(
+            http_options=genai_types.HttpOptions(
+                retry_options=genai_types.HttpRetryOptions(
                     attempts=3,                   # عدد محاولات إعادة المحاولة
                     initial_delay=2.0,            # التأخير الأولي بالثواني
-                    http_status_codes=[408, 429, 500, 502, 503, 504] # رموز الخطأ التي سيتم إعادة المحاولة عليها
+                    http_status_codes=[408, 429, 500, 502, 503, 504]  # رموز الخطأ التي سيتم إعادة المحاولة عليها
                 )
             )
         )
@@ -562,7 +560,6 @@ async def handle_message(message: types.Message):
     user_text = message.text
     text_lower = user_text.lower()
 
-    # تجاهل النصوص التي هي نفس أزرار القائمة (تم معالجتها في handle_buttons)
     if user_text in [
         "💬 ابدأ محادثة", "🖼️ تحليل صورة", "📄 تحويل نص لملف", "📊 تحويل لإكسيل",
         "🎤 إرسال صوت", "👨‍💻 تواصل مع المبرمج", "🔄 تحويل ملفات", "🌐 ترجمة فورية"
@@ -570,7 +567,6 @@ async def handle_message(message: types.Message):
         return
 
     user_id = message.from_user.id
-    # معالجة تحويل الملفات المؤقتة (عند انتظار الصيغة)
     if user_id in user_pending_file:
         chosen_format = None
         if user_text.lower() in ['pdf']: chosen_format = 'pdf'
@@ -611,7 +607,6 @@ async def handle_message(message: types.Message):
                 await message.reply("❌ حدث خطأ أثناء التحويل.")
             return
 
-    # تحويل النص إلى ملف (من الأوامر)
     intent, content = detect_conversion_intent(user_text)
     
     if intent == "EXCEL_NEED_TEXT": return await message.reply("📊 ما هو النص الذي تريد تحويله إلى ملف Excel؟")
@@ -654,7 +649,6 @@ async def handle_message(message: types.Message):
             logger.error(f"PDF error: {e}")
             return await message.reply("❌ حدث خطأ في إنشاء ملف PDF.")
 
-    # تصميم برومبت للصور
     image_keywords = ["اعملي صورة", "اعمل صورة", "ارسم", "صمملي", "تخيل", "صورلي", "توليد صورة", "انشاء صورة", "صمم صورة"]
     is_image_request = any(keyword in text_lower for keyword in image_keywords)
 
@@ -671,7 +665,6 @@ async def handle_message(message: types.Message):
         await message.reply(final_response, parse_mode="Markdown")
         return
 
-    # الترجمة الفورية
     translate_triggers = ["ترجم إلى", "ترجم الى", "ترجم لـ", "ترجمة إلى", "ترجمة لـ", "translate to"]
     is_translate_request = any(trigger in text_lower for trigger in translate_triggers)
 
@@ -701,7 +694,6 @@ async def handle_message(message: types.Message):
             await message.reply(f"🌐 *من فضلك أرسل النص الذي تريد ترجمته إلى {target_lang}.*\n\nمثال: *ترجم إلى {target_lang}: النص هنا*", parse_mode="Markdown")
             return
 
-    # المحادثة العامة
     await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
     resp = await gemini_client.generate(user_text, str(message.from_user.id))
     for i in range(0, len(resp), 4000):
@@ -737,7 +729,6 @@ async def handle_document(message: types.Message, bot: Bot):
     cap = message.caption or ""
     user_id = message.from_user.id
     
-    # معالجة التحويل الحر (أي صيغة)
     if user_id in user_conversion_choice and user_conversion_choice[user_id][0] == "any":
         target = None
         if cap:
@@ -786,7 +777,6 @@ async def handle_document(message: types.Message, bot: Bot):
             await message.reply("📝 *إلى أي صيغة تريد التحويل؟*\n• pdf\n• word\n• excel", parse_mode="Markdown")
             return
     
-    # تحويل محدد مسبقاً من الأزرار
     target = None
     if user_id in user_conversion_choice:
         source, target, label = user_conversion_choice[user_id]
@@ -831,7 +821,6 @@ async def handle_document(message: types.Message, bot: Bot):
             await message.reply("❌ حدث خطأ أثناء التحويل.")
         return
     
-    # تحليل المستندات (PDF, Word, Excel, txt, csv)
     supported = [
         "application/pdf", "text/plain",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
