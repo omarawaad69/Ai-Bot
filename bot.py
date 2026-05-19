@@ -81,9 +81,20 @@ def update_user_activity(user: types.User):
     except Exception as e:
         logger.error(f"User activity error: {e}")
 
+from google.genai import types
+
 class AsyncGeminiClient:
-    def __init__(self, model: str = "gemini-2.0-flash-exp"):
-        self.client = genai.Client()
+    def __init__(self, model: str = "gemini-2.0-flash-lite"):
+        # إنشاء العميل مع خيارات إعادة المحاولة
+        self.client = genai.Client(
+            http_options=types.HttpOptions(
+                retry_options=types.HttpRetryOptions(
+                    attempts=3,                   # عدد محاولات إعادة المحاولة
+                    initial_delay=2.0,            # التأخير الأولي بالثواني
+                    http_status_codes=[408, 429, 500, 502, 503, 504] # رموز الخطأ التي سيتم إعادة المحاولة عليها
+                )
+            )
+        )
         self.model = model
         self.conversations = {}
 
