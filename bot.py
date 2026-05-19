@@ -156,39 +156,38 @@ def enhance_prompt(user_text):
     return f"{user_text}, cinematic, 8k resolution, photorealistic, highly detailed, dramatic lighting, professional color grading, smooth motion"
 
 async def generate_replicate_video(prompt: str):
-    """توليد فيديو باستخدام Replicate API (يدعم نماذج مجانية)"""
+    """توليد فيديو باستخدام Replicate API (Wan 2.1 Text-to-Video)"""
     if not REPLICATE_API_TOKEN:
         raise ValueError("REPLICATE_API_TOKEN غير موجود. أضف المفتاح في Railway Variables.")
 
-    # استخدام نموذج LTX-Video (سريع ونوعيته جيدة للاختبار)
-    # يمكنك تغيير هذا النموذج لاحقاً حسب رغبتك
-    model_version = "lightricks/ltx-video-0-9-8-13b-distilled:3fd1ae72c8a3fdbc9e01c9d1e0e9e8c0e8e0e8e0"  # استبدل بآخر إصدار من الموقع
-    
+    model_name = "wavespeedai/wan-2.1-t2v-480p"
+
     async with aiohttp.ClientSession() as session:
         # بدء مهمة التوليد
         start_response = await session.post(
-            "https://api.replicate.com/v1/predictions",
+            "https://api.replicate.com/v1/models/" + model_name + "/predictions",
             headers={
                 "Authorization": f"Token {REPLICATE_API_TOKEN}",
                 "Content-Type": "application/json",
             },
             json={
-                "version": model_version,
                 "input": {
                     "prompt": prompt,
-                    "num_frames": 97,
-                    "num_inference_steps": 30,
-                    "guidance_scale": 3,
+                    "num_frames": 81,
+                    "num_inference_steps": 20,
+                    "guidance_scale": 4,
+                    "shift": 2,
                 }
             }
         )
+
         if start_response.status != 201:
             error_text = await start_response.text()
             raise Exception(f"Replicate API error {start_response.status}: {error_text}")
-        
+
         prediction = await start_response.json()
         prediction_url = prediction["urls"]["get"]
-        
+
         # الانتظار حتى اكتمال التوليد
         while True:
             await asyncio.sleep(4)
@@ -199,11 +198,16 @@ async def generate_replicate_video(prompt: str):
             status_data = await status_response.json()
             if status_data["status"] == "succeeded":
                 video_url = status_data["output"]
+                # استخراج رابط الفيديو من مخرجات النموذج
+                if isinstance(video_url, dict):
+                    video_url = video_url.get("video_url") or video_url.get("mp4")
+                elif isinstance(video_url, list):
+                    video_url = video_url[0]
                 break
             elif status_data["status"] == "failed":
                 error_msg = status_data.get("error", "فشل غير معروف")
                 raise Exception(f"فشل توليد الفيديو: {error_msg}")
-        
+
         # تحميل الفيديو
         async with session.get(video_url) as video_resp:
             if video_resp.status == 200:
