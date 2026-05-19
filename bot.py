@@ -13,8 +13,7 @@ from datetime import datetime, timedelta
 from PIL import Image
 
 from aiogram import Bot, Dispatcher, Router, types, F
-from aiogram.filters import Command, StateFilter
-from aiogram.fsm.state import State, StatesGroup
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import FSInputFile, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
@@ -33,19 +32,9 @@ router = Router()
 ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "7361263893"))
 DEVELOPER_NAME = "Omar Abd El Gawaad"
 DEVELOPER_USERNAME = "@omarawad68"
-VERCEL_AI_KEY = os.getenv("VERCEL_AI_GATEWAY_KEY", "")  # غير مستخدم الآن
-
-# ========== مفتاح Replicate API (يقرأ من متغير البيئة) ==========
-REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN", "")
-if not REPLICATE_API_TOKEN:
-    logger.warning("REPLICATE_API_TOKEN غير موجود. لن تعمل ميزة الفيديو.")
 
 user_conversion_choice = {}
 user_pending_file = {}
-
-# ==================== حالات توليد الفيديو ====================
-class VideoGen(StatesGroup):
-    waiting_for_prompt = State()
 
 SYSTEM_PROMPT = """
 أنت "مستشار الذكاء الاصطناعي الخارق". أنت تجمع بين خبير موسوعي ومبرمج عبقري. هدفك تقديم إجابات دقيقة واحترافية في كل المجالات، مع قدرة استثنائية على البرمجة.
@@ -150,109 +139,7 @@ class AsyncGeminiClient:
 
 gemini_client = AsyncGeminiClient()
 
-# ==================== دوال تحسين وتوليد الفيديو باستخدام Replicate ====================
-def enhance_prompt(user_text):
-    """تحسين وصف الفيديو ليعطي نتائج احترافية"""
-    return f"{user_text}, cinematic, 8k resolution, photorealistic, highly detailed, dramatic lighting, professional color grading, smooth motion"
-
-async def generate_replicate_video(prompt: str):
-    """توليد فيديو باستخدام Replicate API (Wan 2.1 Text-to-Video)"""
-    if not REPLICATE_API_TOKEN:
-        raise ValueError("REPLICATE_API_TOKEN غير موجود. أضف المفتاح في Railway Variables.")
-
-    model_name = "wavespeedai/wan-2.1-t2v-480p"
-
-    async with aiohttp.ClientSession() as session:
-        # بدء مهمة التوليد
-        start_response = await session.post(
-            "https://api.replicate.com/v1/models/" + model_name + "/predictions",
-            headers={
-                "Authorization": f"Token {REPLICATE_API_TOKEN}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "input": {
-                    "prompt": prompt,
-                    "num_frames": 81,
-                    "num_inference_steps": 20,
-                    "guidance_scale": 4,
-                    "shift": 2,
-                }
-            }
-        )
-
-        if start_response.status != 201:
-            error_text = await start_response.text()
-            raise Exception(f"Replicate API error {start_response.status}: {error_text}")
-
-        prediction = await start_response.json()
-        prediction_url = prediction["urls"]["get"]
-
-        # الانتظار حتى اكتمال التوليد
-        while True:
-            await asyncio.sleep(4)
-            status_response = await session.get(
-                prediction_url,
-                headers={"Authorization": f"Token {REPLICATE_API_TOKEN}"}
-            )
-            status_data = await status_response.json()
-            if status_data["status"] == "succeeded":
-                video_url = status_data["output"]
-                # استخراج رابط الفيديو من مخرجات النموذج
-                if isinstance(video_url, dict):
-                    video_url = video_url.get("video_url") or video_url.get("mp4")
-                elif isinstance(video_url, list):
-                    video_url = video_url[0]
-                break
-            elif status_data["status"] == "failed":
-                error_msg = status_data.get("error", "فشل غير معروف")
-                raise Exception(f"فشل توليد الفيديو: {error_msg}")
-
-        # تحميل الفيديو
-        async with session.get(video_url) as video_resp:
-            if video_resp.status == 200:
-                return await video_resp.read()
-            else:
-                raise Exception("فشل تحميل الفيديو من Replicate")
-
-# ==================== معالج توليد الفيديو ====================
-@router.message(StateFilter(None), F.text == "🎬 توليد فيديو")
-async def start_video_gen(message: types.Message, state: FSMContext):
-    update_user_activity(message.from_user)
-    await message.answer(
-        "🎬 أرسل لي وصفاً دقيقاً للفيديو الذي تريد توليده.\n\n"
-        "📝 *مثال:* جولة جوية فوق مدينة دبي ليلاً مع إضاءة ساحرة",
-        parse_mode="Markdown"
-    )
-    await state.set_state(VideoGen.waiting_for_prompt)
-
-@router.message(VideoGen.waiting_for_prompt)
-async def process_video_prompt(message: types.Message, state: FSMContext):
-    update_user_activity(message.from_user)
-    user_prompt = message.text
-
-    await message.answer("🎥 جاري توليد الفيديو باستخدام الذكاء الاصطناعي... قد يستغرق 30-60 ثانية ⏳")
-
-    try:
-        enhanced = enhance_prompt(user_prompt)
-        logger.info(f"Enhanced prompt: {enhanced}")
-
-        video_data = await generate_replicate_video(enhanced)
-
-        video_file = BytesIO(video_data)
-        video_file.name = "video.mp4"
-        await message.answer_video(
-            video=FSInputFile(video_file),
-            caption=f"🎬 *تم توليد الفيديو بنجاح!*\n\n📝 وصفك: {user_prompt}",
-            parse_mode="Markdown"
-        )
-    except Exception as e:
-        logger.error(f"Video generation error: {e}")
-        await message.answer(f"❌ حدث خطأ أثناء توليد الفيديو: {str(e)}\n\nقد يكون النموذج مشغولاً، حاول مرة أخرى.")
-
-    await state.clear()
-
-# ==================== دوال تحويل الملفات وإنشاء المستندات (من الكود الأصلي) ====================
+# ==================== دوال تحويل الملفات وإنشاء المستندات ====================
 def convert_image_to_png(image_bytes: bytes):
     try:
         img = Image.open(BytesIO(image_bytes))
@@ -524,8 +411,7 @@ async def cmd_start(message: types.Message):
             [KeyboardButton(text="💬 ابدأ محادثة"), KeyboardButton(text="🖼️ تحليل صورة")],
             [KeyboardButton(text="📄 تحويل نص لملف"), KeyboardButton(text="📊 تحويل لإكسيل")],
             [KeyboardButton(text="🎤 إرسال صوت"), KeyboardButton(text="🌐 ترجمة فورية")],
-            [KeyboardButton(text="🔄 تحويل ملفات"), KeyboardButton(text="👨‍💻 تواصل مع المبرمج")],
-            [KeyboardButton(text="🎬 توليد فيديو")]
+            [KeyboardButton(text="🔄 تحويل ملفات"), KeyboardButton(text="👨‍💻 تواصل مع المبرمج")]
         ],
         resize_keyboard=True,
         input_field_placeholder="اختر من القائمة..."
@@ -541,8 +427,7 @@ async def cmd_start(message: types.Message):
         "- تحليل الصور والمستندات\n"
         "- الاستماع إلى الرسائل الصوتية\n"
         "- الترجمة الفورية لأي لغة\n"
-        "- 🎨 تصميم برومبت احترافي للصور\n"
-        "- 🎬 توليد فيديو احترافي بالذكاء الاصطناعي (مجاني عبر Replicate)\n\n"
+        "- 🎨 تصميم برومبت احترافي للصور\n\n"
         "💬 تحدث معي طبيعياً وسأفهمك!\n\n"
         "━━━━━━━━━━━━━━━━━━\n"
         f"👨‍💻 المبرمج: {DEVELOPER_NAME}\n"
@@ -607,10 +492,9 @@ async def cmd_translate(message: types.Message):
 
 @router.message(F.text.in_({
     "💬 ابدأ محادثة", "🖼️ تحليل صورة", "📄 تحويل نص لملف", "📊 تحويل لإكسيل",
-    "🎤 إرسال صوت", "👨‍💻 تواصل مع المبرمج", "🔄 تحويل ملفات", "🌐 ترجمة فورية",
-    "🎬 توليد فيديو"
+    "🎤 إرسال صوت", "👨‍💻 تواصل مع المبرمج", "🔄 تحويل ملفات", "🌐 ترجمة فورية"
 }))
-async def handle_buttons(message: types.Message, state: FSMContext):
+async def handle_buttons(message: types.Message):
     update_user_activity(message.from_user)
     
     if message.text == "💬 ابدأ محادثة":
@@ -659,30 +543,23 @@ async def handle_buttons(message: types.Message, state: FSMContext):
             "📝 *مثال:*\n- ترجم إلى الإنجليزية: النص\n- ترجم إلى الإسبانية: النص\n- ترجم إلى الألمانية: النص",
             parse_mode="Markdown"
         )
-    elif message.text == "🎬 توليد فيديو":
-        await state.clear()
-        await message.answer(
-            "🎬 أرسل لي وصفاً دقيقاً للفيديو الذي تريد توليده.\n\n"
-            "📝 *مثال:* جولة جوية فوق مدينة دبي ليلاً مع إضاءة ساحرة",
-            parse_mode="Markdown"
-        )
-        await state.set_state(VideoGen.waiting_for_prompt)
 
 # ==================== معالجة الرسائل النصية العادية ====================
 @router.message(F.text)
-async def handle_message(message: types.Message, state: FSMContext):
+async def handle_message(message: types.Message):
     update_user_activity(message.from_user)
     user_text = message.text
     text_lower = user_text.lower()
 
+    # تجاهل النصوص التي هي نفس أزرار القائمة (تم معالجتها في handle_buttons)
     if user_text in [
         "💬 ابدأ محادثة", "🖼️ تحليل صورة", "📄 تحويل نص لملف", "📊 تحويل لإكسيل",
-        "🎤 إرسال صوت", "👨‍💻 تواصل مع المبرمج", "🔄 تحويل ملفات", "🌐 ترجمة فورية",
-        "🎬 توليد فيديو"
+        "🎤 إرسال صوت", "👨‍💻 تواصل مع المبرمج", "🔄 تحويل ملفات", "🌐 ترجمة فورية"
     ]:
         return
 
     user_id = message.from_user.id
+    # معالجة تحويل الملفات المؤقتة (عند انتظار الصيغة)
     if user_id in user_pending_file:
         chosen_format = None
         if user_text.lower() in ['pdf']: chosen_format = 'pdf'
@@ -723,6 +600,7 @@ async def handle_message(message: types.Message, state: FSMContext):
                 await message.reply("❌ حدث خطأ أثناء التحويل.")
             return
 
+    # تحويل النص إلى ملف (من الأوامر)
     intent, content = detect_conversion_intent(user_text)
     
     if intent == "EXCEL_NEED_TEXT": return await message.reply("📊 ما هو النص الذي تريد تحويله إلى ملف Excel؟")
@@ -765,6 +643,7 @@ async def handle_message(message: types.Message, state: FSMContext):
             logger.error(f"PDF error: {e}")
             return await message.reply("❌ حدث خطأ في إنشاء ملف PDF.")
 
+    # تصميم برومبت للصور
     image_keywords = ["اعملي صورة", "اعمل صورة", "ارسم", "صمملي", "تخيل", "صورلي", "توليد صورة", "انشاء صورة", "صمم صورة"]
     is_image_request = any(keyword in text_lower for keyword in image_keywords)
 
@@ -781,6 +660,7 @@ async def handle_message(message: types.Message, state: FSMContext):
         await message.reply(final_response, parse_mode="Markdown")
         return
 
+    # الترجمة الفورية
     translate_triggers = ["ترجم إلى", "ترجم الى", "ترجم لـ", "ترجمة إلى", "ترجمة لـ", "translate to"]
     is_translate_request = any(trigger in text_lower for trigger in translate_triggers)
 
@@ -810,6 +690,7 @@ async def handle_message(message: types.Message, state: FSMContext):
             await message.reply(f"🌐 *من فضلك أرسل النص الذي تريد ترجمته إلى {target_lang}.*\n\nمثال: *ترجم إلى {target_lang}: النص هنا*", parse_mode="Markdown")
             return
 
+    # المحادثة العامة
     await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
     resp = await gemini_client.generate(user_text, str(message.from_user.id))
     for i in range(0, len(resp), 4000):
@@ -845,6 +726,7 @@ async def handle_document(message: types.Message, bot: Bot):
     cap = message.caption or ""
     user_id = message.from_user.id
     
+    # معالجة التحويل الحر (أي صيغة)
     if user_id in user_conversion_choice and user_conversion_choice[user_id][0] == "any":
         target = None
         if cap:
@@ -893,6 +775,7 @@ async def handle_document(message: types.Message, bot: Bot):
             await message.reply("📝 *إلى أي صيغة تريد التحويل؟*\n• pdf\n• word\n• excel", parse_mode="Markdown")
             return
     
+    # تحويل محدد مسبقاً من الأزرار
     target = None
     if user_id in user_conversion_choice:
         source, target, label = user_conversion_choice[user_id]
@@ -937,6 +820,7 @@ async def handle_document(message: types.Message, bot: Bot):
             await message.reply("❌ حدث خطأ أثناء التحويل.")
         return
     
+    # تحليل المستندات (PDF, Word, Excel, txt, csv)
     supported = [
         "application/pdf", "text/plain",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
