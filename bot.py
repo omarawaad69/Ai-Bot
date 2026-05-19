@@ -7,15 +7,12 @@ import sqlite3
 import subprocess
 import json
 import glob
-import aiohttp
 from io import BytesIO
 from datetime import datetime, timedelta
 from PIL import Image
 
 from aiogram import Bot, Dispatcher, Router, types, F
 from aiogram.filters import Command
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import FSInputFile, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from dotenv import load_dotenv
 from google import genai
@@ -82,17 +79,8 @@ def update_user_activity(user: types.User):
         logger.error(f"User activity error: {e}")
 
 class AsyncGeminiClient:
-    def __init__(self, model: str = "gemini-2.0-flash-lite"):
-        # إنشاء العميل مع خيارات إعادة المحاولة التلقائية لمواجهة الأخطاء المؤقتة (429, 503, etc.)
-        self.client = genai.Client(
-            http_options=genai_types.HttpOptions(
-                retry_options=genai_types.HttpRetryOptions(
-                    attempts=3,                   # عدد محاولات إعادة المحاولة
-                    initial_delay=2.0,            # التأخير الأولي بالثواني
-                    http_status_codes=[408, 429, 500, 502, 503, 504]  # رموز الخطأ التي سيتم إعادة المحاولة عليها
-                )
-            )
-        )
+    def __init__(self, model: str = "gemini-3.1-flash-lite-preview"):
+        self.client = genai.Client()
         self.model = model
         self.conversations = {}
 
@@ -104,7 +92,10 @@ class AsyncGeminiClient:
         if user_id not in self.conversations:
             self.conversations[user_id] = []
         
-        self.conversations[user_id].append({"role": "user", "parts": [{"text": prompt}]})
+        self.conversations[user_id].append({
+            "role": "user",
+            "parts": [{"text": prompt}]
+        })
         
         if len(self.conversations[user_id]) > 15:
             self.conversations[user_id] = self.conversations[user_id][-15:]
@@ -118,16 +109,24 @@ class AsyncGeminiClient:
         for attempt in range(3):
             try:
                 response = self.client.models.generate_content(
-                    model=self.model, contents=full_context,
+                    model=self.model,
+                    contents=full_context,
                     config=genai_types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT))
                 
                 reply = response.text
-                self.conversations[user_id].append({"role": "model", "parts": [{"text": reply}]})
+                
+                self.conversations[user_id].append({
+                    "role": "model",
+                    "parts": [{"text": reply}]
+                })
+                
                 return reply
             except Exception as e:
                 logger.error(f"Gemini error (attempt {attempt+1}): {e}")
-                if attempt < 2: time.sleep(1)
-                else: return "عذراً، حدث خطأ مؤقت."
+                if attempt < 2:
+                    time.sleep(1)
+                else:
+                    return "عذراً، حدث خطأ مؤقت."
 
     async def generate_with_media(self, prompt: str, media_parts: list) -> str:
         loop = asyncio.get_event_loop()
@@ -148,7 +147,6 @@ class AsyncGeminiClient:
 
 gemini_client = AsyncGeminiClient()
 
-# ==================== دوال تحويل الملفات وإنشاء المستندات ====================
 def convert_image_to_png(image_bytes: bytes):
     try:
         img = Image.open(BytesIO(image_bytes))
@@ -198,7 +196,10 @@ def create_excel_file(text: str, filepath: str):
         header_alignment = Alignment(horizontal='center', vertical='center')
         cell_font = Font(name='Arial', size=12)
         cell_alignment = Alignment(horizontal='center', vertical='center')
-        thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+        thin_border = Border(
+            left=Side(style='thin'), right=Side(style='thin'),
+            top=Side(style='thin'), bottom=Side(style='thin')
+        )
         
         if headers:
             ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(headers))
@@ -230,12 +231,14 @@ def create_excel_file(text: str, filepath: str):
                 try:
                     if len(str(cell.value)) > max_length:
                         max_length = len(str(cell.value))
-                except: pass
+                except:
+                    pass
             adjusted_width = min(max_length + 4, 50)
             ws.column_dimensions[column_letter].width = adjusted_width
         
         if headers:
             ws.auto_filter.ref = ws.dimensions
+    
     else:
         ws['A1'] = "النص المحول"
         ws['A1'].font = Font(name='Arial', size=14, bold=True, color='2F5496')
@@ -320,6 +323,7 @@ def get_conversion_keyboard():
     return keyboard
 
 def run_libreoffice(args, timeout=60):
+    """تشغيل libreoffice مع الإعدادات الصحيحة للصلاحيات"""
     full_args = ['libreoffice', '--headless', '-env:UserInstallation=file:///tmp/libreoffice']
     input_files = [a for a in args if os.path.exists(a) and a.lower().endswith('.pdf')]
     if input_files:
@@ -327,11 +331,13 @@ def run_libreoffice(args, timeout=60):
     
     full_args.extend(args)
     return subprocess.run(
-        full_args, capture_output=True, text=True, timeout=timeout,
+        full_args,
+        capture_output=True, text=True, timeout=timeout,
         env={**os.environ, 'HOME': '/tmp', 'USERPROFILE': '/tmp'}
     )
 
 def convert_pdf_to_excel(input_path: str, output_path: str):
+    """تحويل PDF إلى Excel مع معالجة النص العربي"""
     import pdfplumber
     from openpyxl import Workbook
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
@@ -373,11 +379,21 @@ def convert_pdf_to_excel(input_path: str, output_path: str):
     except Exception as e:
         logger.error(f"PDF to Excel extraction error: {e}")
 
+    # تنسيق الخلايا
+    header_font = Font(name='Arial', size=14, bold=True, color='FFFFFF')
+    header_fill = PatternFill(start_color='2F5496', end_color='2F5496', fill_type='solid')
+    cell_font = Font(name='Arial', size=12)
+    cell_alignment = Alignment(horizontal='center', vertical='center')
+    thin_border = Border(
+        left=Side(style='thin'), right=Side(style='thin'),
+        top=Side(style='thin'), bottom=Side(style='thin')
+    )
+
     for row in ws.iter_rows(min_row=1, max_row=min(ws.max_row, 20)):
         for cell in row:
-            cell.font = Font(name='Arial', size=12)
-            cell.alignment = Alignment(horizontal='center', vertical='center')
-            cell.border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+            cell.font = cell_font
+            cell.alignment = cell_alignment
+            cell.border = thin_border
 
     wb.save(output_path)
 
@@ -397,20 +413,24 @@ async def handle_conversion_callback(callback: CallbackQuery):
     
     if data == "convert_any":
         user_conversion_choice[user_id] = ("any", None, "أي صيغة لأي صيغة")
-        await callback.message.answer("📁 *أرسل الملف الذي تريد تحويله*", parse_mode="Markdown")
+        await callback.message.answer(
+            "📁 *أرسل الملف الذي تريد تحويله*",
+            parse_mode="Markdown"
+        )
         await callback.answer("تم")
         return
     
     if data in conversion_map:
         source, target, label = conversion_map[data]
         user_conversion_choice[user_id] = (source, target, label)
+        
         await callback.message.answer(
-            f"📁 *{label}*\n\nأرسل ملف *{source.upper()}* ليتم تحويله إلى *{target.upper()}*",
+            f"📁 *{label}*\n\n"
+            f"أرسل ملف *{source.upper()}* ليتم تحويله إلى *{target.upper()}*",
             parse_mode="Markdown"
         )
         await callback.answer("تم")
 
-# ==================== أوامر البوت الأساسية ====================
 @router.message(Command("start"))
 async def cmd_start(message: types.Message):
     update_user_activity(message.from_user)
@@ -436,7 +456,7 @@ async def cmd_start(message: types.Message):
         "- تحليل الصور والمستندات\n"
         "- الاستماع إلى الرسائل الصوتية\n"
         "- الترجمة الفورية لأي لغة\n"
-        "- 🎨 تصميم برومبت احترافي للصور\n\n"
+        "- تصميم برومبت احترافي للصور\n\n"
         "💬 تحدث معي طبيعياً وسأفهمك!\n\n"
         "━━━━━━━━━━━━━━━━━━\n"
         f"👨‍💻 المبرمج: {DEVELOPER_NAME}\n"
@@ -447,38 +467,49 @@ async def cmd_start(message: types.Message):
 @router.message(Command("admin"))
 async def cmd_admin(message: types.Message):
     update_user_activity(message.from_user)
+    
     if message.from_user.id != ADMIN_USER_ID:
         await message.answer("⛔ عذراً، هذا الأمر متاح فقط لمالك البوت.")
         return
     
     conn = sqlite3.connect('bot_stats.db')
     cursor = conn.cursor()
+    
     cursor.execute('SELECT COUNT(*) FROM users')
     total_users = cursor.fetchone()[0]
+    
     today = datetime.now().strftime("%Y-%m-%d")
     cursor.execute('SELECT active_users, total_messages FROM daily_stats WHERE date=?', (today,))
     today_stats = cursor.fetchone() or (0, 0)
+    
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     cursor.execute('SELECT active_users, total_messages FROM daily_stats WHERE date=?', (yesterday,))
     yesterday_stats = cursor.fetchone() or (0, 0)
+    
     cursor.execute('SELECT SUM(total_messages) FROM daily_stats')
     total_messages_all_time = cursor.fetchone()[0] or 0
+    
     one_day_ago = (datetime.now() - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
     cursor.execute('SELECT COUNT(*) FROM users WHERE last_active >= ?', (one_day_ago,))
     online_users = cursor.fetchone()[0]
+    
     offline_users = total_users - online_users
+    
     cursor.execute('SELECT username, first_name, last_active FROM users ORDER BY last_active DESC LIMIT 5')
     recent_users = cursor.fetchall()
+    
     conn.close()
     
     stats_message = (
         "📊 *لوحة الإحصائيات*\n\n"
         f"👥 إجمالي المستخدمين: {total_users}\n"
-        f"🟢 متصل: {online_users}\n🔴 غير متصل: {offline_users}\n\n"
+        f"🟢 متصل: {online_users}\n"
+        f"🔴 غير متصل: {offline_users}\n\n"
         f"📅 اليوم: {today_stats[0]} نشط | {today_stats[1]} رسالة\n"
         f"📆 أمس: {yesterday_stats[0]} نشط | {yesterday_stats[1]} رسالة\n\n"
         f"💬 إجمالي الرسائل: {total_messages_all_time}"
     )
+    
     await message.answer(stats_message, parse_mode="Markdown")
 
 @router.message(Command("reset"))
@@ -493,16 +524,18 @@ async def cmd_translate(message: types.Message):
     await message.answer(
         "🌐 *الترجمة الفورية*\n\n"
         "يمكنك الترجمة بطريقتين:\n\n"
-        "1️⃣ *أرسل النص بهذا الشكل:*\n`ترجم إلى الفرنسية: مرحباً، كيف حالك؟`\n\n"
-        "2️⃣ *أرسل رسالة صوتية:*\nسأحولها إلى نص ثم أترجمها لك.\n\n"
-        "📝 *مثال:*\n- ترجم إلى الإنجليزية: النص\n- ترجم إلى الإسبانية: النص\n- ترجم إلى الألمانية: النص",
+        "1️⃣ *أرسل النص بهذا الشكل:*\n"
+        "`ترجم إلى الفرنسية: مرحباً، كيف حالك؟`\n\n"
+        "2️⃣ *أرسل رسالة صوتية:*\n"
+        "سأحولها إلى نص ثم أترجمها لك.\n\n"
+        "📝 *مثال للأوامر:*\n"
+        "- ترجم إلى الإنجليزية: النص\n"
+        "- ترجم إلى الإسبانية: النص\n"
+        "- ترجم إلى الألمانية: النص",
         parse_mode="Markdown"
     )
 
-@router.message(F.text.in_({
-    "💬 ابدأ محادثة", "🖼️ تحليل صورة", "📄 تحويل نص لملف", "📊 تحويل لإكسيل",
-    "🎤 إرسال صوت", "👨‍💻 تواصل مع المبرمج", "🔄 تحويل ملفات", "🌐 ترجمة فورية"
-}))
+@router.message(F.text.in_({"💬 ابدأ محادثة", "🖼️ تحليل صورة", "📄 تحويل نص لملف", "📊 تحويل لإكسيل", "🎤 إرسال صوت", "👨‍💻 تواصل مع المبرمج", "🔄 تحويل ملفات", "🌐 ترجمة فورية"}))
 async def handle_buttons(message: types.Message):
     update_user_activity(message.from_user)
     
@@ -547,23 +580,24 @@ async def handle_buttons(message: types.Message):
         await message.answer(
             "🌐 *الترجمة الفورية*\n\n"
             "يمكنك الترجمة بطريقتين:\n\n"
-            "1️⃣ *أرسل النص بهذا الشكل:*\n`ترجم إلى الفرنسية: مرحباً، كيف حالك؟`\n\n"
-            "2️⃣ *أرسل رسالة صوتية:*\nسأحولها إلى نص ثم أترجمها لك.\n\n"
-            "📝 *مثال:*\n- ترجم إلى الإنجليزية: النص\n- ترجم إلى الإسبانية: النص\n- ترجم إلى الألمانية: النص",
+            "1️⃣ *أرسل النص بهذا الشكل:*\n"
+            "`ترجم إلى الفرنسية: مرحباً، كيف حالك؟`\n\n"
+            "2️⃣ *أرسل رسالة صوتية:*\n"
+            "سأحولها إلى نص ثم أترجمها لك.\n\n"
+            "📝 *مثال للأوامر:*\n"
+            "- ترجم إلى الإنجليزية: النص\n"
+            "- ترجم إلى الإسبانية: النص\n"
+            "- ترجم إلى الألمانية: النص",
             parse_mode="Markdown"
         )
 
-# ==================== معالجة الرسائل النصية العادية ====================
 @router.message(F.text)
 async def handle_message(message: types.Message):
     update_user_activity(message.from_user)
     user_text = message.text
     text_lower = user_text.lower()
 
-    if user_text in [
-        "💬 ابدأ محادثة", "🖼️ تحليل صورة", "📄 تحويل نص لملف", "📊 تحويل لإكسيل",
-        "🎤 إرسال صوت", "👨‍💻 تواصل مع المبرمج", "🔄 تحويل ملفات", "🌐 ترجمة فورية"
-    ]:
+    if user_text in ["💬 ابدأ محادثة", "🖼️ تحليل صورة", "📄 تحويل نص لملف", "📊 تحويل لإكسيل", "🎤 إرسال صوت", "👨‍💻 تواصل مع المبرمج", "🔄 تحويل ملفات", "🌐 ترجمة فورية"]:
         return
 
     user_id = message.from_user.id
@@ -609,9 +643,12 @@ async def handle_message(message: types.Message):
 
     intent, content = detect_conversion_intent(user_text)
     
-    if intent == "EXCEL_NEED_TEXT": return await message.reply("📊 ما هو النص الذي تريد تحويله إلى ملف Excel؟")
-    if intent == "WORD_NEED_TEXT": return await message.reply("📝 ما هو النص الذي تريد تحويله إلى ملف Word؟")
-    if intent == "PDF_NEED_TEXT": return await message.reply("📕 ما هو النص الذي تريد تحويله إلى ملف PDF؟")
+    if intent == "EXCEL_NEED_TEXT":
+        return await message.reply("📊 ما هو النص الذي تريد تحويله إلى ملف Excel؟")
+    if intent == "WORD_NEED_TEXT":
+        return await message.reply("📝 ما هو النص الذي تريد تحويله إلى ملف Word؟")
+    if intent == "PDF_NEED_TEXT":
+        return await message.reply("📕 ما هو النص الذي تريد تحويله إلى ملف PDF؟")
     
     if intent == "excel" and content:
         await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
@@ -661,10 +698,12 @@ async def handle_message(message: types.Message):
         اكتب فقط نص الأمر (البرومبت) بدون أي مقدمات أو شرح إضافي."""
         
         generated_prompt = await gemini_client.generate(prompt_request, str(message.from_user.id))
+        
         final_response = f"🎨 *تم تصميم برومبت احترافي لطلبك:*\n\n`{generated_prompt}`\n\n🖼️ يمكنك نسخ هذا النص ولصقه في أي أداة لتوليد الصور بالذكاء الاصطناعي."
         await message.reply(final_response, parse_mode="Markdown")
         return
 
+    # ==================== الترجمة الفورية ====================
     translate_triggers = ["ترجم إلى", "ترجم الى", "ترجم لـ", "ترجمة إلى", "ترجمة لـ", "translate to"]
     is_translate_request = any(trigger in text_lower for trigger in translate_triggers)
 
@@ -676,6 +715,7 @@ async def handle_message(message: types.Message):
             if trigger in text_lower:
                 idx = text_lower.find(trigger)
                 rest = user_text[idx + len(trigger):].strip()
+                
                 if ':' in rest:
                     target_lang, text_to_translate = rest.split(':', 1)
                     target_lang = target_lang.strip()
@@ -686,8 +726,10 @@ async def handle_message(message: types.Message):
         
         if target_lang and text_to_translate:
             await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+            
             prompt = f"ترجم النص التالي إلى {target_lang}. أرسل الترجمة فقط بدون أي كلام إضافي:\n\n{text_to_translate}"
             translation = await gemini_client.generate(prompt, str(message.from_user.id))
+            
             await message.answer(f"🌐 *الترجمة إلى {target_lang}:*\n\n{translation}", parse_mode="Markdown")
             return
         elif target_lang:
@@ -699,7 +741,6 @@ async def handle_message(message: types.Message):
     for i in range(0, len(resp), 4000):
         await message.answer(resp[i:i+4000])
 
-# ==================== معالجة الصور والمستندات والصوت ====================
 @router.message(F.photo)
 async def handle_photo(message: types.Message, bot: Bot):
     update_user_activity(message.from_user)
@@ -713,7 +754,9 @@ async def handle_photo(message: types.Message, bot: Bot):
         img_bytes, mime = convert_image_to_png(bio.read())
         b64 = base64.b64encode(img_bytes).decode()
         caption = message.caption or "حلل هذه الصورة"
-        resp = await gemini_client.generate_with_media(caption, [{"inline_data": {"mime_type": mime, "data": b64}}])
+        resp = await gemini_client.generate_with_media(caption, [
+            {"inline_data": {"mime_type": mime, "data": b64}}
+        ])
         for i in range(0, len(resp), 4000):
             await message.reply(resp[i:i+4000])
     except Exception as e:
@@ -743,7 +786,8 @@ async def handle_document(message: types.Message, bot: Bot):
                 file_info = await bot.get_file(doc.file_id)
                 file_bytes = await bot.download_file(file_info.file_path)
                 inpath = f"/tmp/{user_id}_{fname}"
-                with open(inpath, 'wb') as f: f.write(file_bytes.read())
+                with open(inpath, 'wb') as f:
+                    f.write(file_bytes.read())
                 expected_out = f"/tmp/{os.path.splitext(fname)[0]}.{target}"
                 
                 if target == 'xlsx' and inpath.lower().endswith('.pdf'):
@@ -762,18 +806,23 @@ async def handle_document(message: types.Message, bot: Bot):
                             os.remove(pf)
                             found = True
                             break
-                    if not found: await message.reply("❌ فشل التحويل.")
+                    if not found:
+                        await message.reply("❌ فشل التحويل.")
                 if os.path.exists(inpath): os.remove(inpath)
                 if os.path.exists(expected_out): os.remove(expected_out)
             except Exception as e:
                 logger.error(f"Convert error: {e}")
                 await message.reply("❌ حدث خطأ أثناء التحويل.")
-            if user_id in user_conversion_choice: del user_conversion_choice[user_id]
+            if user_id in user_conversion_choice:
+                del user_conversion_choice[user_id]
             return
         else:
             file_info = await bot.get_file(doc.file_id)
             file_bytes = await bot.download_file(file_info.file_path)
-            user_pending_file[user_id] = {'file_bytes': file_bytes.read(), 'filename': fname}
+            user_pending_file[user_id] = {
+                'file_bytes': file_bytes.read(),
+                'filename': fname
+            }
             await message.reply("📝 *إلى أي صيغة تريد التحويل؟*\n• pdf\n• word\n• excel", parse_mode="Markdown")
             return
     
@@ -794,7 +843,8 @@ async def handle_document(message: types.Message, bot: Bot):
             file_info = await bot.get_file(doc.file_id)
             file_bytes = await bot.download_file(file_info.file_path)
             inpath = f"/tmp/{user_id}_{fname}"
-            with open(inpath, 'wb') as f: f.write(file_bytes.read())
+            with open(inpath, 'wb') as f:
+                f.write(file_bytes.read())
             expected_out = f"/tmp/{os.path.splitext(fname)[0]}.{target}"
             
             if target == 'xlsx' and inpath.lower().endswith('.pdf'):
@@ -813,7 +863,8 @@ async def handle_document(message: types.Message, bot: Bot):
                         os.remove(pf)
                         found = True
                         break
-                if not found: await message.reply("❌ فشل التحويل.")
+                if not found:
+                    await message.reply("❌ فشل التحويل.")
             if os.path.exists(inpath): os.remove(inpath)
             if os.path.exists(expected_out): os.remove(expected_out)
         except Exception as e:
@@ -846,7 +897,8 @@ async def handle_document(message: types.Message, bot: Bot):
         elif mime == "application/pdf":
             import PyPDF2
             r = PyPDF2.PdfReader(BytesIO(fb))
-            for p in r.pages: text += p.extract_text() or ""
+            for p in r.pages:
+                text += p.extract_text() or ""
         elif "word" in mime:
             import docx as dx
             dxf = dx.Document(BytesIO(fb))
@@ -882,11 +934,15 @@ async def handle_voice(message: types.Message, bot: Bot):
         await bot.download_file(file_info.file_path, bio)
         bio.seek(0)
         
-        with open(ogg_path, "wb") as f: f.write(bio.read())
+        with open(ogg_path, "wb") as f:
+            f.write(bio.read())
         bio.close()
         
         try:
-            subprocess.run(['ffmpeg', '-i', ogg_path, '-ar', '16000', '-ac', '1', wav_path], check=True, capture_output=True, timeout=30)
+            subprocess.run(
+                ['ffmpeg', '-i', ogg_path, '-ar', '16000', '-ac', '1', wav_path],
+                check=True, capture_output=True, timeout=30
+            )
             logger.info("Audio converted to WAV")
         except Exception as e:
             logger.error(f"ffmpeg error: {e}")
@@ -904,7 +960,8 @@ async def handle_voice(message: types.Message, bot: Bot):
             try:
                 text = recognizer.recognize_google(audio, language=lang) if lang else recognizer.recognize_google(audio)
                 if text: break
-            except sr.UnknownValueError: continue
+            except sr.UnknownValueError:
+                continue
             except sr.RequestError as e:
                 logger.error(f"Google API error: {e}")
                 await message.reply("⚠️ خدمة التعرف على الصوت غير متاحة حالياً.")
@@ -928,7 +985,6 @@ async def handle_voice(message: types.Message, bot: Bot):
         if os.path.exists(ogg_path): os.remove(ogg_path)
         if os.path.exists(wav_path): os.remove(wav_path)
 
-# ==================== خادم الويب (API) ====================
 async def handle_web_chat(request):
     try:
         data = await request.json()
@@ -939,7 +995,11 @@ async def handle_web_chat(request):
             return web.json_response({'status': 'error', 'message': 'نص فارغ'})
         
         response = await gemini_client.generate(user_text, user_id)
-        return web.json_response({'status': 'success', 'response': response})
+        
+        return web.json_response({
+            'status': 'success',
+            'response': response
+        })
     except Exception as e:
         logger.error(f"Web chat error: {e}")
         return web.json_response({'status': 'error', 'message': 'حدث خطأ'})
@@ -947,19 +1007,17 @@ async def handle_web_chat(request):
 async def init_web_server():
     app = web.Application()
     app.router.add_post('/api/chat', handle_web_chat)
+    
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', 8000)
     await site.start()
     logger.info("Web server started on port 8000")
 
-# ==================== التشغيل الرئيسي ====================
 async def main():
     init_db()
     bot = Bot(token=os.getenv("TELEGRAM_BOT_TOKEN"))
-    
-    storage = MemoryStorage()
-    dp = Dispatcher(storage=storage)
+    dp = Dispatcher()
     dp.include_router(router)
     
     await init_web_server()
