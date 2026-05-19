@@ -33,12 +33,12 @@ router = Router()
 ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "7361263893"))
 DEVELOPER_NAME = "Omar Abd El Gawaad"
 DEVELOPER_USERNAME = "@omarawad68"
-VERCEL_AI_KEY = os.getenv("VERCEL_AI_GATEWAY_KEY", "")  # قد يكون غير مستخدم الآن
+VERCEL_AI_KEY = os.getenv("VERCEL_AI_GATEWAY_KEY", "")  # غير مستخدم الآن
 
-# ========== مفتاح Hugging Face API (يقرأ من متغير البيئة) ==========
-HF_API_TOKEN = os.getenv("HF_API_TOKEN", "")
-if not HF_API_TOKEN:
-    logger.warning("HF_API_TOKEN غير موجود في متغيرات البيئة. لن تعمل ميزة الفيديو.")
+# ========== مفتاح Replicate API (يقرأ من متغير البيئة) ==========
+REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN", "")
+if not REPLICATE_API_TOKEN:
+    logger.warning("REPLICATE_API_TOKEN غير موجود. لن تعمل ميزة الفيديو.")
 
 user_conversion_choice = {}
 user_pending_file = {}
@@ -150,34 +150,66 @@ class AsyncGeminiClient:
 
 gemini_client = AsyncGeminiClient()
 
-# ==================== دوال تحسين وتوليد الفيديو باستخدام Hugging Face ====================
+# ==================== دوال تحسين وتوليد الفيديو باستخدام Replicate ====================
 def enhance_prompt(user_text):
     """تحسين وصف الفيديو ليعطي نتائج احترافية"""
     return f"{user_text}, cinematic, 8k resolution, photorealistic, highly detailed, dramatic lighting, professional color grading, smooth motion"
 
-async def generate_huggingface_video(prompt: str):
-    """توليد فيديو مجاني باستخدام Hugging Face Inference API"""
-    if not HF_API_TOKEN:
-        raise ValueError("HF_API_TOKEN غير موجود. أضف المفتاح في Railway Variables.")
-    
-    # نموذج مجاني وسريع نسبياً
-    model_id = "damo-vilab/text-to-video-ms-1.7b"
-    api_url = f"https://api-inference.huggingface.co/models/{model_id}"
-    
-    headers = {
-        "Authorization": f"Bearer {HF_API_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    payload = {"inputs": prompt}
+async def generate_replicate_video(prompt: str):
+    """توليد فيديو باستخدام Replicate API (يدعم نماذج مجانية)"""
+    if not REPLICATE_API_TOKEN:
+        raise ValueError("REPLICATE_API_TOKEN غير موجود. أضف المفتاح في Railway Variables.")
+
+    # استخدام نموذج LTX-Video (سريع ونوعيته جيدة للاختبار)
+    # يمكنك تغيير هذا النموذج لاحقاً حسب رغبتك
+    model_version = "lightricks/ltx-video-0-9-8-13b-distilled:3fd1ae72c8a3fdbc9e01c9d1e0e9e8c0e8e0e8e0"  # استبدل بآخر إصدار من الموقع
     
     async with aiohttp.ClientSession() as session:
-        async with session.post(api_url, headers=headers, json=payload) as response:
-            if response.status == 200:
-                video_data = await response.read()
-                return video_data
+        # بدء مهمة التوليد
+        start_response = await session.post(
+            "https://api.replicate.com/v1/predictions",
+            headers={
+                "Authorization": f"Token {REPLICATE_API_TOKEN}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "version": model_version,
+                "input": {
+                    "prompt": prompt,
+                    "num_frames": 97,
+                    "num_inference_steps": 30,
+                    "guidance_scale": 3,
+                }
+            }
+        )
+        if start_response.status != 201:
+            error_text = await start_response.text()
+            raise Exception(f"Replicate API error {start_response.status}: {error_text}")
+        
+        prediction = await start_response.json()
+        prediction_url = prediction["urls"]["get"]
+        
+        # الانتظار حتى اكتمال التوليد
+        while True:
+            await asyncio.sleep(4)
+            status_response = await session.get(
+                prediction_url,
+                headers={"Authorization": f"Token {REPLICATE_API_TOKEN}"}
+            )
+            status_data = await status_response.json()
+            if status_data["status"] == "succeeded":
+                video_url = status_data["output"]
+                break
+            elif status_data["status"] == "failed":
+                error_msg = status_data.get("error", "فشل غير معروف")
+                raise Exception(f"فشل توليد الفيديو: {error_msg}")
+        
+        # تحميل الفيديو
+        async with session.get(video_url) as video_resp:
+            if video_resp.status == 200:
+                return await video_resp.read()
             else:
-                error_text = await response.text()
-                raise Exception(f"API error {response.status}: {error_text}")
+                raise Exception("فشل تحميل الفيديو من Replicate")
 
 # ==================== معالج توليد الفيديو ====================
 @router.message(StateFilter(None), F.text == "🎬 توليد فيديو")
@@ -201,7 +233,7 @@ async def process_video_prompt(message: types.Message, state: FSMContext):
         enhanced = enhance_prompt(user_prompt)
         logger.info(f"Enhanced prompt: {enhanced}")
 
-        video_data = await generate_huggingface_video(enhanced)
+        video_data = await generate_replicate_video(enhanced)
 
         video_file = BytesIO(video_data)
         video_file.name = "video.mp4"
@@ -506,7 +538,7 @@ async def cmd_start(message: types.Message):
         "- الاستماع إلى الرسائل الصوتية\n"
         "- الترجمة الفورية لأي لغة\n"
         "- 🎨 تصميم برومبت احترافي للصور\n"
-        "- 🎬 توليد فيديو احترافي بالذكاء الاصطناعي (مجاني)\n\n"
+        "- 🎬 توليد فيديو احترافي بالذكاء الاصطناعي (مجاني عبر Replicate)\n\n"
         "💬 تحدث معي طبيعياً وسأفهمك!\n\n"
         "━━━━━━━━━━━━━━━━━━\n"
         f"👨‍💻 المبرمج: {DEVELOPER_NAME}\n"
