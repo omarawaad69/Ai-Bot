@@ -33,7 +33,12 @@ router = Router()
 ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "7361263893"))
 DEVELOPER_NAME = "Omar Abd El Gawaad"
 DEVELOPER_USERNAME = "@omarawad68"
-VERCEL_AI_KEY = os.getenv("VERCEL_AI_GATEWAY_KEY", "")
+VERCEL_AI_KEY = os.getenv("VERCEL_AI_GATEWAY_KEY", "")  # قد يكون غير مستخدم الآن
+
+# ========== مفتاح Hugging Face API (يقرأ من متغير البيئة) ==========
+HF_API_TOKEN = os.getenv("HF_API_TOKEN", "")
+if not HF_API_TOKEN:
+    logger.warning("HF_API_TOKEN غير موجود في متغيرات البيئة. لن تعمل ميزة الفيديو.")
 
 user_conversion_choice = {}
 user_pending_file = {}
@@ -88,7 +93,7 @@ def update_user_activity(user: types.User):
         logger.error(f"User activity error: {e}")
 
 class AsyncGeminiClient:
-    def __init__(self, model: str = "gemini-3.1-flash-lite-preview"):
+    def __init__(self, model: str = "gemini-2.0-flash-exp"):
         self.client = genai.Client()
         self.model = model
         self.conversations = {}
@@ -145,54 +150,34 @@ class AsyncGeminiClient:
 
 gemini_client = AsyncGeminiClient()
 
-# ==================== دوال تحسين وتوليد الفيديو ====================
+# ==================== دوال تحسين وتوليد الفيديو باستخدام Hugging Face ====================
 def enhance_prompt(user_text):
     """تحسين وصف الفيديو ليعطي نتائج احترافية"""
     return f"{user_text}, cinematic, 8k resolution, photorealistic, highly detailed, dramatic lighting, professional color grading, smooth motion"
 
-async def generate_seedance_video(prompt, duration=5, resolution="720p", aspect_ratio="16:9"):
-    """توليد الفيديو باستخدام Seedance 2.0 عبر Vercel AI Gateway"""
-    if not VERCEL_AI_KEY:
-        raise ValueError("VERCEL_AI_GATEWAY_KEY not set")
-
+async def generate_huggingface_video(prompt: str):
+    """توليد فيديو مجاني باستخدام Hugging Face Inference API"""
+    if not HF_API_TOKEN:
+        raise ValueError("HF_API_TOKEN غير موجود. أضف المفتاح في Railway Variables.")
+    
+    # نموذج مجاني وسريع نسبياً
+    model_id = "damo-vilab/text-to-video-ms-1.7b"
+    api_url = f"https://api-inference.huggingface.co/models/{model_id}"
+    
     headers = {
-        "Authorization": f"Bearer {VERCEL_AI_KEY}",
+        "Authorization": f"Bearer {HF_API_TOKEN}",
         "Content-Type": "application/json"
     }
+    payload = {"inputs": prompt}
     
-    payload = {
-        "model": "seedance-2.0",
-        "prompt": prompt,
-        "duration": duration,
-        "resolution": resolution,
-        "aspect_ratio": aspect_ratio
-    }
-
     async with aiohttp.ClientSession() as session:
-        # 1. إرسال طلب التوليد
-        async with session.post("https://api.vercel.ai/v1/video/generations", json=payload, headers=headers) as resp:
-            if resp.status != 200:
-                error_text = await resp.text()
-                raise Exception(f"API error {resp.status}: {error_text}")
-            data = await resp.json()
-            generation_id = data.get("id")
-            if not generation_id:
-                raise Exception(f"Unexpected response: {data}")
-
-        # 2. انتظار اكتمال التوليد
-        status_url = f"https://api.vercel.ai/v1/video/generations/{generation_id}"
-        for attempt in range(60):  # أقصى وقت انتظار 5 دقائق
-            await asyncio.sleep(5)
-            async with session.get(status_url, headers=headers) as resp:
-                if resp.status != 200:
-                    continue
-                status_data = await resp.json()
-                if status_data.get("status") == "completed":
-                    return status_data.get("video_url")
-                elif status_data.get("status") == "failed":
-                    raise Exception("Video generation failed")
-
-        raise TimeoutError("Video generation timed out")
+        async with session.post(api_url, headers=headers, json=payload) as response:
+            if response.status == 200:
+                video_data = await response.read()
+                return video_data
+            else:
+                error_text = await response.text()
+                raise Exception(f"API error {response.status}: {error_text}")
 
 # ==================== معالج توليد الفيديو ====================
 @router.message(StateFilter(None), F.text == "🎬 توليد فيديو")
@@ -210,36 +195,28 @@ async def process_video_prompt(message: types.Message, state: FSMContext):
     update_user_activity(message.from_user)
     user_prompt = message.text
 
-    await message.answer("🎥 جاري تحسين الوصف وتوليد الفيديو... قد يستغرق هذا بعض الوقت ⏳")
+    await message.answer("🎥 جاري توليد الفيديو باستخدام الذكاء الاصطناعي... قد يستغرق 30-60 ثانية ⏳")
 
     try:
-        # 1. تحسين الوصف
         enhanced = enhance_prompt(user_prompt)
         logger.info(f"Enhanced prompt: {enhanced}")
 
-        # 2. توليد الفيديو
-        video_url = await generate_seedance_video(enhanced)
+        video_data = await generate_huggingface_video(enhanced)
 
-        # 3. تحميل الفيديو وإرساله
-        async with aiohttp.ClientSession() as session:
-            async with session.get(video_url) as resp:
-                if resp.status == 200:
-                    video_data = await resp.read()
-                    video_file = BytesIO(video_data)
-                    video_file.name = "video.mp4"
-                    await message.answer_video(
-                        video=FSInputFile(video_file),
-                        caption=f"🎬 *تم توليد الفيديو بنجاح!*\n\n📝 الوصف: {user_prompt}",
-                        parse_mode="Markdown"
-                    )
-                else:
-                    await message.answer(f"❌ فشل تحميل الفيديو. الرابط: {video_url}")
+        video_file = BytesIO(video_data)
+        video_file.name = "video.mp4"
+        await message.answer_video(
+            video=FSInputFile(video_file),
+            caption=f"🎬 *تم توليد الفيديو بنجاح!*\n\n📝 وصفك: {user_prompt}",
+            parse_mode="Markdown"
+        )
     except Exception as e:
         logger.error(f"Video generation error: {e}")
-        await message.answer(f"❌ حدث خطأ أثناء توليد الفيديو: {str(e)}")
+        await message.answer(f"❌ حدث خطأ أثناء توليد الفيديو: {str(e)}\n\nقد يكون النموذج مشغولاً، حاول مرة أخرى.")
 
     await state.clear()
 
+# ==================== دوال تحويل الملفات وإنشاء المستندات (من الكود الأصلي) ====================
 def convert_image_to_png(image_bytes: bytes):
     try:
         img = Image.open(BytesIO(image_bytes))
@@ -327,7 +304,6 @@ def create_excel_file(text: str, filepath: str):
         
         if headers:
             ws.auto_filter.ref = ws.dimensions
-    
     else:
         ws['A1'] = "النص المحول"
         ws['A1'].font = Font(name='Arial', size=14, bold=True, color='2F5496')
@@ -412,7 +388,6 @@ def get_conversion_keyboard():
     return keyboard
 
 def run_libreoffice(args, timeout=60):
-    """تشغيل libreoffice مع الإعدادات الصحيحة للصلاحيات"""
     full_args = ['libreoffice', '--headless', '-env:UserInstallation=file:///tmp/libreoffice']
     input_files = [a for a in args if os.path.exists(a) and a.lower().endswith('.pdf')]
     if input_files:
@@ -425,7 +400,6 @@ def run_libreoffice(args, timeout=60):
     )
 
 def convert_pdf_to_excel(input_path: str, output_path: str):
-    """تحويل PDF إلى Excel مع معالجة النص العربي"""
     import pdfplumber
     from openpyxl import Workbook
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
@@ -504,6 +478,7 @@ async def handle_conversion_callback(callback: CallbackQuery):
         )
         await callback.answer("تم")
 
+# ==================== أوامر البوت الأساسية ====================
 @router.message(Command("start"))
 async def cmd_start(message: types.Message):
     update_user_activity(message.from_user)
@@ -531,7 +506,7 @@ async def cmd_start(message: types.Message):
         "- الاستماع إلى الرسائل الصوتية\n"
         "- الترجمة الفورية لأي لغة\n"
         "- 🎨 تصميم برومبت احترافي للصور\n"
-        "- 🎬 توليد فيديو احترافي بالذكاء الاصطناعي\n\n"
+        "- 🎬 توليد فيديو احترافي بالذكاء الاصطناعي (مجاني)\n\n"
         "💬 تحدث معي طبيعياً وسأفهمك!\n\n"
         "━━━━━━━━━━━━━━━━━━\n"
         f"👨‍💻 المبرمج: {DEVELOPER_NAME}\n"
@@ -657,41 +632,7 @@ async def handle_buttons(message: types.Message, state: FSMContext):
         )
         await state.set_state(VideoGen.waiting_for_prompt)
 
-@router.message(VideoGen.waiting_for_prompt)
-async def process_video_prompt(message: types.Message, state: FSMContext):
-    update_user_activity(message.from_user)
-    user_prompt = message.text
-
-    await message.answer("🎥 جاري تحسين الوصف وتوليد الفيديو... قد يستغرق هذا بعض الوقت ⏳")
-
-    try:
-        # 1. تحسين الوصف
-        enhanced = enhance_prompt(user_prompt)
-        logger.info(f"Enhanced prompt: {enhanced}")
-
-        # 2. توليد الفيديو
-        video_url = await generate_seedance_video(enhanced)
-
-        # 3. تحميل الفيديو وإرساله
-        async with aiohttp.ClientSession() as session:
-            async with session.get(video_url) as resp:
-                if resp.status == 200:
-                    video_data = await resp.read()
-                    video_file = BytesIO(video_data)
-                    video_file.name = "video.mp4"
-                    await message.answer_video(
-                        video=FSInputFile(video_file),
-                        caption=f"🎬 *تم توليد الفيديو بنجاح!*\n\n📝 الوصف: {user_prompt}",
-                        parse_mode="Markdown"
-                    )
-                else:
-                    await message.answer(f"❌ فشل تحميل الفيديو. الرابط: {video_url}")
-    except Exception as e:
-        logger.error(f"Video generation error: {e}")
-        await message.answer(f"❌ حدث خطأ أثناء توليد الفيديو: {str(e)}")
-
-    await state.clear()
-
+# ==================== معالجة الرسائل النصية العادية ====================
 @router.message(F.text)
 async def handle_message(message: types.Message, state: FSMContext):
     update_user_activity(message.from_user)
@@ -804,7 +745,6 @@ async def handle_message(message: types.Message, state: FSMContext):
         await message.reply(final_response, parse_mode="Markdown")
         return
 
-    # ==================== الترجمة الفورية ====================
     translate_triggers = ["ترجم إلى", "ترجم الى", "ترجم لـ", "ترجمة إلى", "ترجمة لـ", "translate to"]
     is_translate_request = any(trigger in text_lower for trigger in translate_triggers)
 
@@ -839,6 +779,7 @@ async def handle_message(message: types.Message, state: FSMContext):
     for i in range(0, len(resp), 4000):
         await message.answer(resp[i:i+4000])
 
+# ==================== معالجة الصور والمستندات والصوت ====================
 @router.message(F.photo)
 async def handle_photo(message: types.Message, bot: Bot):
     update_user_activity(message.from_user)
@@ -1067,6 +1008,7 @@ async def handle_voice(message: types.Message, bot: Bot):
         if os.path.exists(ogg_path): os.remove(ogg_path)
         if os.path.exists(wav_path): os.remove(wav_path)
 
+# ==================== خادم الويب (API) ====================
 async def handle_web_chat(request):
     try:
         data = await request.json()
@@ -1091,11 +1033,11 @@ async def init_web_server():
     await site.start()
     logger.info("Web server started on port 8000")
 
+# ==================== التشغيل الرئيسي ====================
 async def main():
     init_db()
     bot = Bot(token=os.getenv("TELEGRAM_BOT_TOKEN"))
     
-    # استخدام MemoryStorage لتجنب تعارضات الحالات
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)
     dp.include_router(router)
