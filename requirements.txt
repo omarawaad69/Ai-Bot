@@ -2,7 +2,7 @@ aiogram
 google-genai
 python-dotenv
 Pillow
-PyPDF2
+pypdf
 python-docx
 SpeechRecognition
 openpyxl
