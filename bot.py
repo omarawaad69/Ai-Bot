@@ -1295,4 +1295,11 @@ async def main():
     init_db()
     bot = Bot(token=os.getenv("TELEGRAM_BOT_TOKEN"))
     dp  = Dispatcher()
-    dp.include_router(route
+    dp.include_router(router)
+
+    logger.info(f"Bot starting with model: {GEMINI_MODEL}")
+    await init_web_server()
+    await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
+
+if __name__ == "__main__":
+    asyncio.run(main())
