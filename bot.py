@@ -40,7 +40,7 @@ router = Router()
 ADMIN_USER_ID     = int(os.getenv("ADMIN_USER_ID", "7361263893"))
 DEVELOPER_NAME    = "Omar Abd El Gawaad"
 DEVELOPER_USERNAME = "@omarawad68"
-GEMINI_MODEL      = "gemini-2.0-flash"   # ✅ تصحيح: الموديل الصحيح
+GEMINI_MODEL = "gemini-3.1-flash-lite-preview"
 
 # ─────────────────────────────────────────
 #  Rate Limiting  ⚡
