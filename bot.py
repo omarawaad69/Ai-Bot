@@ -276,10 +276,26 @@ class AsyncGeminiClient:
     def _sync_generate_with_media(self, prompt: str, media_parts: list) -> str:
         for attempt in range(3):
             try:
-                contents = media_parts + [{"text": prompt}]
+                # ✅ تحويل dicts إلى Part objects للـ SDK الجديد
+                parts = []
+                for mp in media_parts:
+                    if "inline_data" in mp:
+                        parts.append(
+                            genai_types.Part(
+                                inline_data=genai_types.Blob(
+                                    mime_type=mp["inline_data"]["mime_type"],
+                                    data=base64.b64decode(mp["inline_data"]["data"])
+                                )
+                            )
+                        )
+                    elif "text" in mp:
+                        parts.append(genai_types.Part(text=mp["text"]))
+
+                parts.append(genai_types.Part(text=prompt))
+
                 response = self.client.models.generate_content(
                     model=self.model,
-                    contents=contents,
+                    contents=[genai_types.Content(role="user", parts=parts)],
                     config=genai_types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT)
                 )
                 return response.text
@@ -1045,9 +1061,11 @@ async def handle_photo(message: types.Message, bot: Bot):
         await bot.download_file(file_info.file_path, bio)
         bio.seek(0)
         img_bytes, mime = convert_image_to_png(bio.read())
-        b64     = base64.b64encode(img_bytes).decode()
+        b64     = base64.b64encode(img_bytes).decode("utf-8")
         caption = message.caption or "حلل هذه الصورة وصفها بالتفصيل."
-        resp    = await gemini_client.generate_with_media(caption, [{"inline_data": {"mime_type": mime, "data": b64}}])
+        resp    = await gemini_client.generate_with_media(
+            caption, [{"inline_data": {"mime_type": mime, "data": b64}}]
+        )
         for i in range(0, len(resp), 4000):
             await message.reply(resp[i:i + 4000])
     except Exception as e:
@@ -1277,11 +1295,4 @@ async def main():
     init_db()
     bot = Bot(token=os.getenv("TELEGRAM_BOT_TOKEN"))
     dp  = Dispatcher()
-    dp.include_router(router)
-
-    logger.info(f"Bot starting with model: {GEMINI_MODEL}")
-    await init_web_server()
-    await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    dp.include_router(route
