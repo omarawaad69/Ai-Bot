@@ -21,6 +21,7 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types as genai_types
 from aiohttp import web
+import aiohttp  # <-- تمت الإضافة للـ self-ping
 
 load_dotenv()
 
@@ -1468,7 +1469,7 @@ async def handle_voice(message: types.Message, bot: Bot):
                     pass
 
 # ─────────────────────────────────────────
-#  Web Server
+#  Web Server + Keep-Alive داخلي
 # ─────────────────────────────────────────
 async def handle_health(request):
     try:
@@ -1507,6 +1508,20 @@ async def init_web_server():
     await site.start()
     logger.info(f"Web server started ✅  port={os.getenv('PORT', 8000)}")
 
+async def keep_alive_ping():
+    """إبقاء Replit مستيقظاً عبر طلب self-ping كل 30 ثانية"""
+    await asyncio.sleep(10)  # انتظر حتى يبدأ السيرفر
+    port = int(os.getenv("PORT", 8000))
+    url = f"http://0.0.0.0:{port}/health"
+    async with aiohttp.ClientSession() as session:
+        while True:
+            try:
+                async with session.get(url) as resp:
+                    logger.debug(f"Keep-alive ping: status {resp.status}")
+            except Exception as e:
+                logger.error(f"Keep-alive ping failed: {e}")
+            await asyncio.sleep(30)
+
 # ─────────────────────────────────────────
 #  نقطة الانطلاق
 # ─────────────────────────────────────────
@@ -1517,6 +1532,7 @@ async def main():
     dp.include_router(router)
     logger.info(f"Bot starting with model: {GEMINI_MODEL}")
     await init_web_server()
+    asyncio.create_task(keep_alive_ping())   # <-- مهمة الإبقاء على النشاط
     await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
 
 if __name__ == "__main__":
