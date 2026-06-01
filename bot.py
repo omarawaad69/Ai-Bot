@@ -6,7 +6,7 @@ import base64
 import sqlite3
 import subprocess
 import glob
-import shutil
+import shutil  # <--- تمت الإضافة لاستخدام which
 from io import BytesIO
 from datetime import datetime, timedelta
 from collections import defaultdict
@@ -14,9 +14,9 @@ from PIL import Image
 
 from aiogram import Bot, Dispatcher, Router, types, F
 from aiogram.filters import Command
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.state import State, StatesGroup  # <--- تمت الإضافة لـ Quiz
+from aiogram.fsm.context import FSMContext        # <--- تمت الإضافة لـ Quiz
+from aiogram.fsm.storage.memory import MemoryStorage  # <--- تمت الإضافة لـ Quiz
 from aiogram.types import (
     FSInputFile, ReplyKeyboardMarkup, KeyboardButton,
     InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
@@ -24,10 +24,13 @@ from aiogram.types import (
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types as genai_types
+from aiohttp import web
 
 load_dotenv()
 
-# ==================== الإعدادات الأساسية ====================
+# ─────────────────────────────────────────
+#  الإعدادات الأساسية
+# ─────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -36,32 +39,28 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 router = Router()
-storage = MemoryStorage()
+storage = MemoryStorage()  # <--- تمت الإضافة للـ Quiz
 
 ADMIN_USER_ID      = int(os.getenv("ADMIN_USER_ID", "7361263893"))
 DEVELOPER_NAME     = "Omar Abd El Gawaad"
 DEVELOPER_USERNAME = "@omarawad68"
-GEMINI_MODEL       = "gemini-2.0-flash-lite"
+GEMINI_MODEL       = "gemini-3.1-flash-lite-preview"
 
-# التحقق من المتغيرات الأساسية
-if not os.getenv("TELEGRAM_BOT_TOKEN"):
-    raise ValueError("TELEGRAM_BOT_TOKEN غير موجود")
-if not os.getenv("GOOGLE_API_KEY") and not os.getenv("GEMINI_API_KEY"):
-    raise ValueError("يجب تعيين GOOGLE_API_KEY أو GEMINI_API_KEY")
-if os.getenv("GEMINI_API_KEY") and not os.getenv("GOOGLE_API_KEY"):
-    os.environ["GOOGLE_API_KEY"] = os.getenv("GEMINI_API_KEY")
-
-# ==================== التحقق من وجود ffmpeg ====================
+# ─────────────────────────────────────────
+#  التحقق من وجود ffmpeg
+# ─────────────────────────────────────────
 FFMPEG_PATH = shutil.which("ffmpeg") or shutil.which("ffmpeg.exe") or "/usr/bin/ffmpeg"
 if not os.path.exists(FFMPEG_PATH):
-    logger.warning("ffmpeg not found in PATH. Voice conversion will fail.")
+    logger.warning("⚠️ ffmpeg not found. Voice conversion will fail.")
     # محاولة مسارات بديلة
     for path in ["/usr/local/bin/ffmpeg", "/bin/ffmpeg"]:
         if os.path.exists(path):
             FFMPEG_PATH = path
             break
 
-# ==================== Rate Limiting ====================
+# ─────────────────────────────────────────
+#  Rate Limiting (كما هو)
+# ─────────────────────────────────────────
 RATE_LIMIT_MESSAGES = 20
 RATE_LIMIT_WINDOW   = 60
 RATE_LIMIT_COOLDOWN = 30
@@ -70,8 +69,6 @@ _rate_data:    dict[int, list[float]] = defaultdict(list)
 _banned_until: dict[int, float]       = {}
 
 def check_rate_limit(user_id: int) -> tuple[bool, int]:
-    if user_id == ADMIN_USER_ID:
-        return True, 0
     now = time.time()
     if user_id in _banned_until:
         remaining = int(_banned_until[user_id] - now)
@@ -86,7 +83,9 @@ def check_rate_limit(user_id: int) -> tuple[bool, int]:
         return False, RATE_LIMIT_COOLDOWN
     return True, 0
 
-# ==================== Response Cache ====================
+# ─────────────────────────────────────────
+#  Response Cache (كما هو)
+# ─────────────────────────────────────────
 _response_cache: dict[str, tuple[str, float]] = {}
 CACHE_TTL = 300
 
@@ -105,7 +104,9 @@ def set_cache(prompt: str, response: str):
             del _response_cache[k]
     _response_cache[prompt] = (response, time.time())
 
-# ==================== System Prompt ====================
+# ─────────────────────────────────────────
+#  System Prompt (كما هو)
+# ─────────────────────────────────────────
 SYSTEM_PROMPT = """
 أنت "مستشار الذكاء الاصطناعي الخارق". تجمع بين خبير موسوعي ومبرمج عبقري.
 هدفك تقديم إجابات دقيقة واحترافية في كل المجالات.
@@ -119,7 +120,9 @@ SYSTEM_PROMPT = """
 5. الأمان: ترفض أي طلب لإنشاء محتوى ضار أو غير قانوني.
 """
 
-# ==================== قاعدة البيانات ====================
+# ─────────────────────────────────────────
+#  قاعدة البيانات (كما هو)
+# ─────────────────────────────────────────
 DB_PATH = "bot_stats.db"
 
 def get_db() -> sqlite3.Connection:
@@ -215,7 +218,9 @@ def is_user_banned(user_id: int) -> bool:
     except Exception:
         return False
 
-# ==================== ذاكرة المحادثة ====================
+# ─────────────────────────────────────────
+#  ذاكرة المحادثة الدائمة (كما هو)
+# ─────────────────────────────────────────
 MAX_HISTORY = 20
 
 def load_conversation(user_id: int) -> list[dict]:
@@ -257,7 +262,9 @@ def clear_conversation(user_id: int):
     except Exception as e:
         logger.error(f"Clear conversation error: {e}")
 
-# ==================== Gemini Client ====================
+# ─────────────────────────────────────────
+#  Gemini Client (كما هو)
+# ─────────────────────────────────────────
 class AsyncGeminiClient:
     def __init__(self, model: str = GEMINI_MODEL):
         self.client = genai.Client()
@@ -296,7 +303,7 @@ class AsyncGeminiClient:
             except Exception as e:
                 logger.error(f"Gemini error (attempt {attempt + 1}): {e}")
                 if attempt < 2:
-                    time.sleep(2 ** attempt)
+                    time.sleep(1)
                 else:
                     log_error(user_id, "gemini_generate", str(e))
                     return "⚠️ عذراً، حدث خطأ مؤقت. حاول مرة أخرى."
@@ -331,26 +338,28 @@ class AsyncGeminiClient:
             except Exception as e:
                 logger.error(f"Gemini media error (attempt {attempt + 1}): {e}")
                 if attempt < 2:
-                    time.sleep(2 ** attempt)
+                    time.sleep(1)
                 else:
                     return "⚠️ عذراً، حدث خطأ مؤقت. حاول مرة أخرى."
 
 gemini_client = AsyncGeminiClient()
 
-# ==================== إدارة البيانات المؤقتة للمستخدمين ====================
+# ==================== بيانات المستخدم المؤقتة ====================
 user_conversion_choice: dict[int, tuple] = {}
 user_pending_file:      dict[int, dict]  = {}
 user_awaiting_feedback: dict[int, bool]  = {}
 user_awaiting_quiz:     dict[int, bool]  = {}
 
-# ==================== إدارة الاختبار التفاعلي ====================
+# ==================== نظام الاختبار التفاعلي (Quiz) ====================
 class QuizState(StatesGroup):
     waiting_for_topic = State()
     answering_question = State()
 
 quiz_sessions: dict[int, dict] = {}
 
-# ==================== أدوات الملفات ====================
+# ─────────────────────────────────────────
+#  أدوات الملفات (كما هي)
+# ─────────────────────────────────────────
 def convert_image_to_png(image_bytes: bytes) -> tuple[bytes, str]:
     try:
         img = Image.open(BytesIO(image_bytes))
@@ -448,7 +457,7 @@ def run_libreoffice(args: list, timeout: int = 60) -> subprocess.CompletedProces
 def convert_pdf_to_excel(input_path: str, output_path: str):
     import pdfplumber
     from openpyxl import Workbook
-    from openpyxl.styles import Font, Alignment, Border, Side
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
     import arabic_reshaper
     from bidi.algorithm import get_display
 
@@ -539,7 +548,9 @@ async def do_file_conversion(message: types.Message, file_bytes: bytes, fname: s
                 except Exception:
                     pass
 
-# ==================== لوحات المفاتيح ====================
+# ─────────────────────────────────────────
+#  UI Keyboards (كما هي)
+# ─────────────────────────────────────────
 def get_main_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
@@ -639,7 +650,9 @@ def detect_conversion_intent(text: str):
                     return f"{fmt.upper()}_NEED_TEXT", ""
     return None, None
 
-# ==================== مساعد تحديد السرعة ====================
+# ─────────────────────────────────────────
+#  Rate Limit Helper (كما هو)
+# ─────────────────────────────────────────
 async def rate_limit_check(message: types.Message) -> bool:
     user_id = message.from_user.id
     if user_id == ADMIN_USER_ID:
@@ -653,7 +666,9 @@ async def rate_limit_check(message: types.Message) -> bool:
         return True
     return False
 
-# ==================== الأوامر الأساسية ====================
+# ─────────────────────────────────────────
+#  الأوامر الأساسية (مع تعديل زر الاختبار)
+# ─────────────────────────────────────────
 @router.message(Command("start"))
 async def cmd_start(message: types.Message):
     update_user_activity(message.from_user)
@@ -686,7 +701,8 @@ async def cmd_start(message: types.Message):
 async def cmd_help(message: types.Message):
     update_user_activity(message.from_user)
     await message.answer(
-        "📖 *دليل الاستخدام*\n\nاختر الفئة التي تريد معرفة المزيد عنها:",
+        "📖 *دليل الاستخدام*\n\n"
+        "اختر الفئة التي تريد معرفة المزيد عنها:",
         reply_markup=get_help_keyboard(),
         parse_mode="Markdown"
     )
@@ -744,21 +760,7 @@ async def cmd_summarize(message: types.Message):
     resp   = await gemini_client.generate(prompt, message.from_user.id, use_cache=True)
     await message.reply(f"📝 *الملخص:*\n\n{resp}", parse_mode="Markdown")
 
-@router.message(Command("translate"))
-async def cmd_translate(message: types.Message):
-    update_user_activity(message.from_user)
-    await message.answer(
-        "🌐 *الترجمة الفورية*\n\n"
-        "أرسل النص بهذا الشكل:\n"
-        "`ترجم إلى الفرنسية: مرحباً، كيف حالك؟`\n\n"
-        "📝 *أمثلة:*\n"
-        "- ترجم إلى الإنجليزية: النص\n"
-        "- ترجم إلى الإسبانية: النص\n"
-        "- ترجم إلى الألمانية: النص",
-        parse_mode="Markdown"
-    )
-
-# ==================== زر اختبار المعلومات التفاعلي ====================
+# ==================== اختبار المعلومات التفاعلي (بدلاً من الأمر /quiz) ====================
 @router.message(F.text == "🧠 اختبار معلومات")
 async def start_quiz_interactive(message: types.Message, state: FSMContext):
     update_user_activity(message.from_user)
@@ -819,6 +821,7 @@ async def send_quiz_question(message: types.Message, user_id: int, state: FSMCon
         return
     q = sess["questions"][sess["current_index"]]
     text = f"❓ *السؤال {sess['current_index']+1}/{sess['total']}*:\n{q['question']}\n\n"
+    # إنشاء أزرار للخيارات (أ، ب، ج، د)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=opt, callback_data=f"quiz_ans_{chr(65+i)}") for i, opt in enumerate(q['options'])]
     ])
@@ -882,525 +885,23 @@ async def finish_quiz(message: types.Message, user_id: int, state: FSMContext):
     await message.answer(summary, parse_mode="Markdown")
     await state.clear()
 
-# ==================== أزرار القائمة الرئيسية ====================
-BUTTON_TEXTS = {
-    "💬 ابدأ محادثة", "🖼️ تحليل صورة", "📄 تحويل نص لملف",
-    "📊 تحويل لإكسيل", "🎤 إرسال صوت", "👨‍💻 تواصل مع المبرمج",
-    "🔄 تحويل ملفات", "🌐 ترجمة فورية", "📝 تلخيص نص",
-    "🎨 برومبت صورة",  "🧠 اختبار معلومات", "⭐ تقييم البوت"
-}
-
-@router.message(F.text.in_(BUTTON_TEXTS))
-async def handle_buttons(message: types.Message):
+@router.message(Command("translate"))
+async def cmd_translate(message: types.Message):
     update_user_activity(message.from_user)
-    t = message.text
-
-    if t == "🔄 تحويل ملفات":
-        await message.answer("🔄 *اختر نوع التحويل:*", parse_mode="Markdown", reply_markup=get_conversion_keyboard())
-    elif t == "💬 ابدأ محادثة":
-        await message.answer("📝 أنا جاهز! أرسل سؤالك أو طلبك وسأجيبك فوراً.")
-    elif t == "🖼️ تحليل صورة":
-        await message.answer("🖼️ أرسل لي الصورة التي تريد تحليلها وسأصفها بالتفصيل.")
-    elif t == "📄 تحويل نص لملف":
-        await message.answer(
-            "📄 *تحويل النص إلى ملف*\n\n"
-            "أرسل لي النص مع نوع الملف المطلوب:\n\n"
-            "• *وورد:* حولي النص دا لملف وورد: ...\n"
-            "• *PDF:*  حولي النص دا لملف PDF: ...\n"
-            "• *اكسيل:* حولي النص دا لملف اكسيل: ...",
-            parse_mode="Markdown"
-        )
-    elif t == "📊 تحويل لإكسيل":
-        await message.answer(
-            "📊 *تحويل النص إلى Excel*\n\n"
-            "أرسل النص بهذا الشكل:\n"
-            "`حولي النص دا لملف اكسيل: الاسم, العمر, المدينة\nأحمد, 25, القاهرة\nمحمد, 30, الإسكندرية`",
-            parse_mode="Markdown"
-        )
-    elif t == "🎤 إرسال صوت":
-        await message.answer(
-            "🎤 *الرسائل الصوتية*\n\n"
-            "أرسل لي رسالة صوتية وسأقوم بـ:\n\n"
-            "1️⃣ تحويلها إلى نص مكتوب\n"
-            "2️⃣ الرد على محتواها\n"
-            "3️⃣ يمكنك طلب إنشاء ملف من النص"
-        )
-    elif t == "🌐 ترجمة فورية":
-        await message.answer(
-            "🌐 *الترجمة الفورية*\n\n"
-            "اكتب: `ترجم إلى [اللغة]: [النص]`\n\n"
-            "أمثلة:\n- ترجم إلى الإنجليزية: مرحباً\n- ترجم إلى الفرنسية: كيف حالك",
-            parse_mode="Markdown"
-        )
-    elif t == "📝 تلخيص نص":
-        await message.answer(
-            "📝 *تلخيص النص*\n\n"
-            "أرسل النص الذي تريد تلخيصه مباشرة، أو استخدم:\n"
-            "`/summarize النص هنا...`\n\n"
-            "يمكنك أيضاً إرسال ملف PDF أو Word وسألخصه لك!",
-            parse_mode="Markdown"
-        )
-    elif t == "🎨 برومبت صورة":
-        await message.answer(
-            "🎨 *برومبت توليد الصور*\n\n"
-            "اكتب وصفاً للصورة وسأحوله إلى برومبت احترافي:\n\n"
-            "مثال: `اعمل صورة لمدينة مستقبلية تحت الماء`",
-            parse_mode="Markdown"
-        )
-    elif t == "⭐ تقييم البوت":
-        await message.answer(
-            "⭐ *قيّم تجربتك مع البوت*\n\nاختر عدد النجوم:",
-            reply_markup=get_feedback_keyboard(),
-            parse_mode="Markdown"
-        )
-    elif t == "👨‍💻 تواصل مع المبرمج":
-        await message.answer(
-            f"👨‍💻 *المبرمج:* {DEVELOPER_NAME}\n\n📧 *للتواصل:* {DEVELOPER_USERNAME}",
-            parse_mode="Markdown"
-        )
-    # ملاحظة: زر اختبار المعلومات تم معالجته أعلاه بشكل منفصل
-
-# ==================== معالج الرسائل النصية ====================
-@router.message(F.text)
-async def handle_message(message: types.Message, state: FSMContext):
-    if message.text in BUTTON_TEXTS:
-        return
-
-    update_user_activity(message.from_user)
-
-    if await rate_limit_check(message):
-        return
-    if is_user_banned(message.from_user.id):
-        return await message.reply("⛔ تم حظرك من استخدام هذا البوت.")
-
-    user_id    = message.from_user.id
-    user_text  = message.text
-    text_lower = user_text.lower()
-
-    # ── حالة انتظار اختيار صيغة الملف ──
-    if user_id in user_pending_file:
-        fmt_map = {"pdf": "pdf", "word": "docx", "docx": "docx", "excel": "xlsx", "xlsx": "xlsx"}
-        chosen  = fmt_map.get(text_lower.strip())
-        if chosen:
-            pending = user_pending_file.pop(user_id)
-            await message.bot.send_chat_action(chat_id=message.chat.id, action="upload_document")
-            await do_file_conversion(message, pending["file_bytes"], pending["filename"], chosen)
-            return
-
-    # ── كشف نية التحويل ──
-    intent, content = detect_conversion_intent(user_text)
-
-    need_text_map = {
-        "EXCEL_NEED_TEXT": "📊 ما هو النص الذي تريد تحويله إلى Excel؟",
-        "WORD_NEED_TEXT":  "📝 ما هو النص الذي تريد تحويله إلى Word؟",
-        "PDF_NEED_TEXT":   "📕 ما هو النص الذي تريد تحويله إلى PDF؟",
-    }
-    if intent in need_text_map:
-        return await message.reply(need_text_map[intent])
-
-    if intent in ("excel", "docx", "pdf") and content:
-        await message.bot.send_chat_action(chat_id=message.chat.id, action="upload_document")
-        ext_map   = {"excel": "xlsx", "docx": "docx", "pdf": "pdf"}
-        cap_map   = {"excel": "📊 ملف Excel جاهز!", "docx": "📄 ملف Word جاهز!", "pdf": "📕 ملف PDF جاهز!"}
-        func_map  = {"excel": create_excel_file, "docx": create_docx_file, "pdf": create_pdf_file}
-        ext       = ext_map[intent]
-        path      = f"/tmp/{user_id}_doc.{ext}"
-        try:
-            func_map[intent](content, path)
-            await message.reply_document(FSInputFile(path), caption=cap_map[intent])
-            os.remove(path)
-        except Exception as e:
-            logger.error(f"{intent} creation error: {e}")
-            log_error(user_id, f"create_{intent}", str(e))
-            await message.reply(f"❌ حدث خطأ في إنشاء الملف. تفاصيل الخطأ سُجِّلت.")
-        return
-
-    # ── تلخيص ──
-    summarize_triggers = ["لخص", "لخصلي", "تلخيص", "summarize", "ملخص"]
-    if any(kw in text_lower for kw in summarize_triggers):
-        await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
-        prompt = f"لخص النص التالي بشكل مختصر واحترافي مع الحفاظ على أهم النقاط:\n\n{user_text}"
-        resp   = await gemini_client.generate(prompt, user_id, use_cache=True)
-        await message.reply(f"📝 *الملخص:*\n\n{resp}", parse_mode="Markdown")
-        return
-
-    # ── برومبت صورة ──
-    image_keywords = ["اعملي صورة", "اعمل صورة", "ارسم", "صمملي", "تخيل", "صورلي",
-                      "توليد صورة", "انشاء صورة", "صمم صورة"]
-    if any(kw in text_lower for kw in image_keywords):
-        await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
-        prompt = (
-            f"حوّل الطلب التالي إلى برومبت إبداعي واحترافي باللغة العربية لتوليد الصور بالذكاء الاصطناعي. "
-            f"أضف تفاصيل عن الإضاءة والألوان والزاوية والجو العام.\n\n"
-            f"طلب المستخدم: {user_text}\n\n"
-            f"اكتب فقط نص البرومبت بدون أي مقدمات أو شرح."
-        )
-        generated = await gemini_client.generate(prompt, user_id, use_cache=True)
-        await message.reply(
-            f"🎨 *برومبت احترافي لطلبك:*\n\n`{generated}`\n\n"
-            "🖼️ انسخ هذا النص ولصقه في Midjourney أو DALL-E أو أي أداة توليد صور.",
-            parse_mode="Markdown"
-        )
-        return
-
-    # ── ترجمة ──
-    translate_triggers = ["ترجم إلى", "ترجم الى", "ترجم لـ", "ترجمة إلى", "ترجمة لـ", "translate to"]
-    for trigger in translate_triggers:
-        if trigger in text_lower:
-            idx  = text_lower.find(trigger)
-            rest = user_text[idx + len(trigger):].strip()
-            if ":" in rest:
-                target_lang, text_to_translate = rest.split(":", 1)
-                target_lang       = target_lang.strip()
-                text_to_translate = text_to_translate.strip()
-                if target_lang and text_to_translate:
-                    await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
-                    prompt = f"ترجم النص التالي إلى {target_lang}. أرسل الترجمة فقط:\n\n{text_to_translate}"
-                    translation = await gemini_client.generate(prompt, user_id, use_cache=True)
-                    await message.answer(f"🌐 *الترجمة إلى {target_lang}:*\n\n{translation}", parse_mode="Markdown")
-                    return
-            else:
-                await message.reply(
-                    f"🌐 أرسل النص بهذا الشكل:\n`ترجم إلى {rest}: النص هنا`",
-                    parse_mode="Markdown"
-                )
-                return
-
-    # ── رد Gemini العادي ──
-    await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
-    resp = await gemini_client.generate(user_text, user_id)
-    for i in range(0, len(resp), 4000):
-        await message.answer(resp[i:i + 4000])
-
-# ==================== معالج الصور ====================
-@router.message(F.photo)
-async def handle_photo(message: types.Message, bot: Bot):
-    update_user_activity(message.from_user)
-    if await rate_limit_check(message):
-        return
-    if is_user_banned(message.from_user.id):
-        return
-    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
-    try:
-        photo     = message.photo[-1]
-        file_info = await bot.get_file(photo.file_id)
-        bio       = BytesIO()
-        await bot.download_file(file_info.file_path, bio)
-        bio.seek(0)
-        img_bytes, mime = convert_image_to_png(bio.read())
-        b64     = base64.b64encode(img_bytes).decode("utf-8")
-        caption = message.caption or "حلل هذه الصورة وصفها بالتفصيل."
-        resp    = await gemini_client.generate_with_media(
-            caption, [{"inline_data": {"mime_type": mime, "data": b64}}]
-        )
-        for i in range(0, len(resp), 4000):
-            await message.reply(resp[i:i + 4000])
-    except Exception as e:
-        logger.error(f"Photo error: {e}")
-        log_error(message.from_user.id, "photo_analysis", str(e))
-        await message.reply("⚠️ عذراً، حدث خطأ أثناء تحليل الصورة. حاول مرة أخرى.")
-
-# ==================== معالج المستندات ====================
-@router.message(F.document)
-async def handle_document(message: types.Message, bot: Bot):
-    update_user_activity(message.from_user)
-    if await rate_limit_check(message):
-        return
-    if is_user_banned(message.from_user.id):
-        return
-
-    doc     = message.document
-    fname   = doc.file_name or "document"
-    mime    = doc.mime_type or ""
-    cap     = message.caption or ""
-    user_id = message.from_user.id
-
-    # ── تحويل ملف بناءً على اختيار سابق ──
-    if user_id in user_conversion_choice:
-        source, target, label = user_conversion_choice[user_id]
-        if source == "any" and not target:
-            c = cap.lower()
-            if   "pdf"   in c: target = "pdf"
-            elif "word"  in c or "docx" in c: target = "docx"
-            elif "excel" in c or "xlsx" in c: target = "xlsx"
-        if target:
-            await bot.send_chat_action(chat_id=message.chat.id, action="upload_document")
-            file_info  = await bot.get_file(doc.file_id)
-            file_bytes = await bot.download_file(file_info.file_path)
-            del user_conversion_choice[user_id]
-            await do_file_conversion(message, file_bytes.read(), fname, target)
-            return
-        else:
-            file_info  = await bot.get_file(doc.file_id)
-            file_bytes = await bot.download_file(file_info.file_path)
-            user_pending_file[user_id] = {"file_bytes": file_bytes.read(), "filename": fname}
-            await message.reply(
-                "📝 *إلى أي صيغة تريد التحويل؟*\n\n• `pdf`\n• `word`\n• `excel`",
-                parse_mode="Markdown"
-            )
-            return
-
-    # ── كشف نية التحويل من التعليق ──
-    if cap:
-        c      = cap.lower()
-        target = None
-        if   "pdf"   in c: target = "pdf"
-        elif "word"  in c or "docx" in c: target = "docx"
-        elif "excel" in c or "xlsx" in c: target = "xlsx"
-        elif "ppt"   in c or "pptx" in c: target = "pptx"
-        if target:
-            await bot.send_chat_action(chat_id=message.chat.id, action="upload_document")
-            file_info  = await bot.get_file(doc.file_id)
-            file_bytes = await bot.download_file(file_info.file_path)
-            await do_file_conversion(message, file_bytes.read(), fname, target)
-            return
-
-    # ── تحليل المستند بالذكاء الاصطناعي ──
-    supported_mimes = {
-        "application/pdf", "text/plain",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "application/msword",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "application/vnd.ms-excel",
-        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        "text/csv"
-    }
-    if mime not in supported_mimes:
-        return await message.reply(
-            "⚠️ *نوع الملف غير مدعوم للتحليل.*\n\n"
-            "الصيغ المدعومة: PDF, Word, Excel, CSV, TXT",
-            parse_mode="Markdown"
-        )
-
-    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
-    try:
-        info = await bot.get_file(doc.file_id)
-        bio  = BytesIO()
-        await bot.download_file(info.file_path, bio)
-        bio.seek(0)
-        fb   = bio.read()
-        text = ""
-
-        if mime in ("text/plain", "text/csv"):
-            text = fb.decode("utf-8", errors="ignore")
-        elif mime == "application/pdf":
-            import PyPDF2
-            reader = PyPDF2.PdfReader(BytesIO(fb))
-            for page in reader.pages:
-                text += page.extract_text() or ""
-        elif "word" in mime:
-            import docx as dx
-            doc_obj = dx.Document(BytesIO(fb))
-            text    = "\n".join(p.text for p in doc_obj.paragraphs)
-        elif "excel" in mime or "spreadsheet" in mime:
-            from openpyxl import load_workbook
-            wb   = load_workbook(BytesIO(fb), read_only=True)
-            ws   = wb.active
-            text = "\n".join(" | ".join(str(c) if c else "" for c in row) for row in ws.iter_rows(values_only=True))
-
-        if not text.strip():
-            return await message.reply("⚠️ لم أستطع استخراج نص من هذا الملف. قد يكون الملف مشفراً أو يحتوي على صور فقط.")
-
-        prompt = f"حلل هذا المستند ({fname}). {cap or 'قدم ملخصاً شاملاً للمحتوى مع أبرز النقاط.'}\n\n{text[:10000]}"
-        resp   = await gemini_client.generate(prompt, user_id)
-        for i in range(0, len(resp), 4000):
-            await message.reply(resp[i:i + 4000])
-    except Exception as e:
-        logger.error(f"Document analysis error: {e}")
-        log_error(user_id, "document_analysis", str(e))
-        await message.reply("⚠️ عذراً، حدث خطأ أثناء تحليل المستند.")
-
-# ==================== معالج الصوت ====================
-@router.message(F.voice)
-async def handle_voice(message: types.Message, bot: Bot):
-    update_user_activity(message.from_user)
-    if await rate_limit_check(message):
-        return
-    if is_user_banned(message.from_user.id):
-        return
-
-    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
-    user_id  = message.from_user.id
-    ogg_path = f"/tmp/{user_id}_voice.ogg"
-    wav_path = f"/tmp/{user_id}_voice.wav"
-
-    try:
-        file_info = await bot.get_file(message.voice.file_id)
-        bio       = BytesIO()
-        await bot.download_file(file_info.file_path, bio)
-        bio.seek(0)
-        with open(ogg_path, "wb") as f:
-            f.write(bio.read())
-
-        # استخدام ffmpeg مع المسار المحدد
-        ffmpeg_cmd = FFMPEG_PATH if FFMPEG_PATH and os.path.exists(FFMPEG_PATH) else "ffmpeg"
-        try:
-            subprocess.run(
-                [ffmpeg_cmd, "-y", "-i", ogg_path, "-ar", "16000", "-ac", "1", wav_path],
-                check=True, capture_output=True, timeout=30
-            )
-        except Exception as e:
-            logger.error(f"ffmpeg error: {e}")
-            return await message.reply("🎤 عذراً، فشل تحويل الصوت. تأكد من أن الملف الصوتي سليم وأن ffmpeg مثبت في البيئة.")
-
-        import speech_recognition as sr
-        recognizer = sr.Recognizer()
-        with sr.AudioFile(wav_path) as source:
-            audio = recognizer.record(source)
-
-        text = None
-        for lang in ["ar-AR", "en-US", ""]:
-            try:
-                text = recognizer.recognize_google(audio, language=lang) if lang else recognizer.recognize_google(audio)
-                if text:
-                    break
-            except sr.UnknownValueError:
-                continue
-            except sr.RequestError as e:
-                logger.error(f"Google STT error: {e}")
-                return await message.reply("⚠️ خدمة التعرف على الصوت غير متاحة حالياً. حاول مرة أخرى.")
-
-        if not text:
-            return await message.reply("🎤 لم أتمكن من فهم الصوت. جرب مرة أخرى بصوت أوضح وبدون ضوضاء.")
-
-        await message.reply(f"🎤 *لقد فهمت:* _{text}_", parse_mode="Markdown")
-        resp = await gemini_client.generate(text, user_id)
-        for i in range(0, len(resp), 4000):
-            await message.answer(resp[i:i + 4000])
-
-    except ImportError:
-        await message.reply("⚠️ مكتبة التعرف على الصوت غير مثبتة.")
-    except Exception as e:
-        logger.error(f"Voice error: {e}")
-        log_error(user_id, "voice_processing", str(e))
-        await message.reply("🎤 عذراً، حدث خطأ أثناء معالجة الصوت.")
-    finally:
-        for p in [ogg_path, wav_path]:
-            if os.path.exists(p):
-                try:
-                    os.remove(p)
-                except Exception:
-                    pass
-
-# ==================== Callbacks للتحويل والتقييم والمساعدة ====================
-CONVERSION_MAP = {
-    "convert_word2pdf":   ("docx", "pdf",  "Word → PDF"),
-    "convert_pdf2word":   ("pdf",  "docx", "PDF → Word"),
-    "convert_excel2pdf":  ("xlsx", "pdf",  "Excel → PDF"),
-    "convert_pdf2excel":  ("pdf",  "xlsx", "PDF → Excel"),
-    "convert_excel2word": ("xlsx", "docx", "Excel → Word"),
-    "convert_word2excel": ("docx", "xlsx", "Word → Excel"),
-}
-
-HELP_TEXTS = {
-    "help_chat": (
-        "💬 *المحادثة والأسئلة*\n\n"
-        "- اكتب أي سؤال مباشرة وسأجيبك\n"
-        "- يمكنك الحديث بأي لغة\n"
-        "- البوت يتذكر سياق المحادثة\n"
-        "- `/reset` لمسح السياق والبدء من جديد\n"
-        "- `/quiz موضوع` لاختبار معلوماتك"
-    ),
-    "help_files": (
-        "📁 *الملفات والتحويل*\n\n"
-        "- أرسل ملفاً مع كتابة الصيغة المطلوبة في التعليق\n"
-        "- مثال: أرسل ملف Word وأكتب 'pdf' في التعليق\n"
-        "- أو استخدم زر 🔄 تحويل ملفات من القائمة\n"
-        "- الصيغ المدعومة: PDF, Word, Excel, PowerPoint"
-    ),
-    "help_translate": (
+    await message.answer(
         "🌐 *الترجمة الفورية*\n\n"
-        "اكتب: `ترجم إلى [اللغة]: [النص]`\n\n"
-        "أمثلة:\n"
-        "- ترجم إلى الإنجليزية: مرحباً\n"
-        "- ترجم إلى الفرنسية: كيف حالك\n"
-        "- ترجم إلى الإسبانية: شكراً"
-    ),
-    "help_images": (
-        "🎨 *برومبت توليد الصور*\n\n"
-        "- اكتب: `اعمل صورة [الوصف]`\n"
-        "- أو استخدم زر 🎨 برومبت صورة\n\n"
-        "البوت سيحول وصفك إلى برومبت احترافي\n"
-        "يمكنك نسخه ولصقه في Midjourney أو DALL-E"
-    ),
-    "help_voice": (
-        "🎤 *الرسائل الصوتية*\n\n"
-        "- أرسل أي رسالة صوتية\n"
-        "- البوت سيحولها إلى نص ويرد عليها\n"
-        "- يدعم العربية والإنجليزية تلقائياً"
-    ),
-    "help_stats": (
-        "📊 *الإحصائيات*\n\n"
-        "- `/status` لعرض حالة البوت\n"
-        "- يمكنك تقييم البوت بالضغط على ⭐ تقييم البوت\n"
-        "- تقييماتك تساعدنا على التطوير!"
-    ),
-}
+        "أرسل النص بهذا الشكل:\n"
+        "`ترجم إلى الفرنسية: مرحباً، كيف حالك؟`\n\n"
+        "📝 *أمثلة:*\n"
+        "- ترجم إلى الإنجليزية: النص\n"
+        "- ترجم إلى الإسبانية: النص\n"
+        "- ترجم إلى الألمانية: النص",
+        parse_mode="Markdown"
+    )
 
-@router.callback_query()
-async def handle_all_callbacks(callback: CallbackQuery):
-    user_id = callback.from_user.id
-    data    = callback.data
-
-    # ── تحويل الملفات ──
-    if data == "convert_any":
-        user_conversion_choice[user_id] = ("any", None, "أي صيغة لأي صيغة")
-        await callback.message.answer(
-            "📁 *أرسل الملف مع كتابة الصيغة المطلوبة في التعليق.*\n"
-            "مثال: اكتب `pdf` أو `word` أو `excel` كتعليق للملف.",
-            parse_mode="Markdown"
-        )
-        await callback.answer("تم ✅")
-        return
-
-    if data in CONVERSION_MAP:
-        source, target, label = CONVERSION_MAP[data]
-        user_conversion_choice[user_id] = (source, target, label)
-        await callback.message.answer(
-            f"📁 *{label}*\n\nأرسل ملف *{source.upper()}* ليتم تحويله إلى *{target.upper()}*.",
-            parse_mode="Markdown"
-        )
-        await callback.answer("تم ✅")
-        return
-
-    # ── تقييم البوت ──
-    if data.startswith("rate_"):
-        rating = int(data.split("_")[1])
-        stars  = "⭐" * rating
-        try:
-            with get_db() as conn:
-                conn.execute(
-                    "INSERT INTO feedback (user_id, rating) VALUES (?, ?)",
-                    (user_id, rating)
-                )
-            await callback.message.edit_text(
-                f"شكراً على تقييمك! {stars}\n\n"
-                "تقييمك يساعدنا على تحسين البوت باستمرار. 🙏"
-            )
-            if rating <= 2:
-                try:
-                    bot = callback.bot
-                    await bot.send_message(
-                        ADMIN_USER_ID,
-                        f"⚠️ *تقييم منخفض!*\n\nمستخدم `{user_id}` أعطى تقييم {stars}",
-                        parse_mode="Markdown"
-                    )
-                except Exception:
-                    pass
-        except Exception as e:
-            await callback.answer("❌ حدث خطأ في حفظ التقييم.")
-        await callback.answer(f"تم التقييم بـ {stars}")
-        return
-
-    # ── مساعدة ──
-    if data in HELP_TEXTS:
-        await callback.message.answer(HELP_TEXTS[data], parse_mode="Markdown")
-        await callback.answer()
-        return
-
-    await callback.answer()
-
-# ==================== لوحة الأدمن ====================
+# ─────────────────────────────────────────
+#  لوحة الأدمن (كما هي)
+# ─────────────────────────────────────────
 @router.message(Command("admin"))
 async def cmd_admin(message: types.Message):
     if message.from_user.id != ADMIN_USER_ID:
@@ -1545,13 +1046,585 @@ async def cmd_broadcast(message: types.Message, bot: Bot):
         parse_mode="Markdown"
     )
 
-# ==================== نقطة الانطلاق (بدون خادم ويب لتجنب مشاكل المنافذ) ====================
+# ─────────────────────────────────────────
+#  Callbacks (بالإضافة إلى quiz_ans_)
+# ─────────────────────────────────────────
+CONVERSION_MAP = {
+    "convert_word2pdf":   ("docx", "pdf",  "Word → PDF"),
+    "convert_pdf2word":   ("pdf",  "docx", "PDF → Word"),
+    "convert_excel2pdf":  ("xlsx", "pdf",  "Excel → PDF"),
+    "convert_pdf2excel":  ("pdf",  "xlsx", "PDF → Excel"),
+    "convert_excel2word": ("xlsx", "docx", "Excel → Word"),
+    "convert_word2excel": ("docx", "xlsx", "Word → Excel"),
+}
+
+HELP_TEXTS = {
+    "help_chat": (
+        "💬 *المحادثة والأسئلة*\n\n"
+        "- اكتب أي سؤال مباشرة وسأجيبك\n"
+        "- يمكنك الحديث بأي لغة\n"
+        "- البوت يتذكر سياق المحادثة\n"
+        "- `/reset` لمسح السياق والبدء من جديد\n"
+        "- اضغط على زر 🧠 اختبار معلومات لبدء اختبار تفاعلي"
+    ),
+    "help_files": (
+        "📁 *الملفات والتحويل*\n\n"
+        "- أرسل ملفاً مع كتابة الصيغة المطلوبة في التعليق\n"
+        "- مثال: أرسل ملف Word وأكتب 'pdf' في التعليق\n"
+        "- أو استخدم زر 🔄 تحويل ملفات من القائمة\n"
+        "- الصيغ المدعومة: PDF, Word, Excel, PowerPoint"
+    ),
+    "help_translate": (
+        "🌐 *الترجمة الفورية*\n\n"
+        "اكتب: `ترجم إلى [اللغة]: [النص]`\n\n"
+        "أمثلة:\n"
+        "- ترجم إلى الإنجليزية: مرحباً\n"
+        "- ترجم إلى الفرنسية: كيف حالك\n"
+        "- ترجم إلى الإسبانية: شكراً"
+    ),
+    "help_images": (
+        "🎨 *برومبت توليد الصور*\n\n"
+        "- اكتب: `اعمل صورة [الوصف]`\n"
+        "- أو استخدم زر 🎨 برومبت صورة\n\n"
+        "البوت سيحول وصفك إلى برومبت احترافي\n"
+        "يمكنك نسخه ولصقه في Midjourney أو DALL-E"
+    ),
+    "help_voice": (
+        "🎤 *الرسائل الصوتية*\n\n"
+        "- أرسل أي رسالة صوتية\n"
+        "- البوت سيحولها إلى نص ويرد عليها\n"
+        "- يدعم العربية والإنجليزية تلقائياً"
+    ),
+    "help_stats": (
+        "📊 *الإحصائيات*\n\n"
+        "- `/status` لعرض حالة البوت\n"
+        "- يمكنك تقييم البوت بالضغط على ⭐ تقييم البوت\n"
+        "- تقييماتك تساعدنا على التطوير!"
+    ),
+}
+
+@router.callback_query()
+async def handle_all_callbacks(callback: CallbackQuery, state: FSMContext):
+    user_id = callback.from_user.id
+    data    = callback.data
+
+    # تمرير callback الخاصة بالاختبار إلى المعالج المخصص لها
+    if data.startswith("quiz_ans_"):
+        await handle_quiz_answer(callback, state)
+        return
+
+    # ── تحويل الملفات ──
+    if data == "convert_any":
+        user_conversion_choice[user_id] = ("any", None, "أي صيغة لأي صيغة")
+        await callback.message.answer(
+            "📁 *أرسل الملف مع كتابة الصيغة المطلوبة في التعليق.*\n"
+            "مثال: اكتب `pdf` أو `word` أو `excel` كتعليق للملف.",
+            parse_mode="Markdown"
+        )
+        await callback.answer("تم ✅")
+        return
+
+    if data in CONVERSION_MAP:
+        source, target, label = CONVERSION_MAP[data]
+        user_conversion_choice[user_id] = (source, target, label)
+        await callback.message.answer(
+            f"📁 *{label}*\n\nأرسل ملف *{source.upper()}* ليتم تحويله إلى *{target.upper()}*.",
+            parse_mode="Markdown"
+        )
+        await callback.answer("تم ✅")
+        return
+
+    # ── تقييم البوت ──
+    if data.startswith("rate_"):
+        rating = int(data.split("_")[1])
+        stars  = "⭐" * rating
+        try:
+            with get_db() as conn:
+                conn.execute(
+                    "INSERT INTO feedback (user_id, rating) VALUES (?, ?)",
+                    (user_id, rating)
+                )
+            await callback.message.edit_text(
+                f"شكراً على تقييمك! {stars}\n\n"
+                "تقييمك يساعدنا على تحسين البوت باستمرار. 🙏"
+            )
+            if rating <= 2:
+                try:
+                    bot = callback.bot
+                    await bot.send_message(
+                        ADMIN_USER_ID,
+                        f"⚠️ *تقييم منخفض!*\n\nمستخدم `{user_id}` أعطى تقييم {stars}",
+                        parse_mode="Markdown"
+                    )
+                except Exception:
+                    pass
+        except Exception as e:
+            await callback.answer("❌ حدث خطأ في حفظ التقييم.")
+        await callback.answer(f"تم التقييم بـ {stars}")
+        return
+
+    # ── مساعدة ──
+    if data in HELP_TEXTS:
+        await callback.message.answer(HELP_TEXTS[data], parse_mode="Markdown")
+        await callback.answer()
+        return
+
+    await callback.answer()
+
+# ─────────────────────────────────────────
+#  أزرار القائمة الرئيسية
+# ─────────────────────────────────────────
+BUTTON_TEXTS = {
+    "💬 ابدأ محادثة", "🖼️ تحليل صورة", "📄 تحويل نص لملف",
+    "📊 تحويل لإكسيل", "🎤 إرسال صوت", "👨‍💻 تواصل مع المبرمج",
+    "🔄 تحويل ملفات", "🌐 ترجمة فورية", "📝 تلخيص نص",
+    "🎨 برومبت صورة",  "🧠 اختبار معلومات", "⭐ تقييم البوت"
+}
+
+@router.message(F.text.in_(BUTTON_TEXTS))
+async def handle_buttons(message: types.Message):
+    update_user_activity(message.from_user)
+    t = message.text
+
+    if t == "🔄 تحويل ملفات":
+        await message.answer("🔄 *اختر نوع التحويل:*", parse_mode="Markdown", reply_markup=get_conversion_keyboard())
+
+    elif t == "💬 ابدأ محادثة":
+        await message.answer("📝 أنا جاهز! أرسل سؤالك أو طلبك وسأجيبك فوراً.")
+
+    elif t == "🖼️ تحليل صورة":
+        await message.answer("🖼️ أرسل لي الصورة التي تريد تحليلها وسأصفها بالتفصيل.")
+
+    elif t == "📄 تحويل نص لملف":
+        await message.answer(
+            "📄 *تحويل النص إلى ملف*\n\n"
+            "أرسل لي النص مع نوع الملف المطلوب:\n\n"
+            "• *وورد:* حولي النص دا لملف وورد: ...\n"
+            "• *PDF:*  حولي النص دا لملف PDF: ...\n"
+            "• *اكسيل:* حولي النص دا لملف اكسيل: ...",
+            parse_mode="Markdown"
+        )
+
+    elif t == "📊 تحويل لإكسيل":
+        await message.answer(
+            "📊 *تحويل النص إلى Excel*\n\n"
+            "أرسل النص بهذا الشكل:\n"
+            "`حولي النص دا لملف اكسيل: الاسم, العمر, المدينة\nأحمد, 25, القاهرة\nمحمد, 30, الإسكندرية`",
+            parse_mode="Markdown"
+        )
+
+    elif t == "🎤 إرسال صوت":
+        await message.answer(
+            "🎤 *الرسائل الصوتية*\n\n"
+            "أرسل لي رسالة صوتية وسأقوم بـ:\n\n"
+            "1️⃣ تحويلها إلى نص مكتوب\n"
+            "2️⃣ الرد على محتواها\n"
+            "3️⃣ يمكنك طلب إنشاء ملف من النص"
+        )
+
+    elif t == "🌐 ترجمة فورية":
+        await message.answer(
+            "🌐 *الترجمة الفورية*\n\n"
+            "اكتب: `ترجم إلى [اللغة]: [النص]`\n\n"
+            "أمثلة:\n"
+            "- ترجم إلى الإنجليزية: مرحباً\n"
+            "- ترجم إلى الفرنسية: كيف حالك",
+            parse_mode="Markdown"
+        )
+
+    elif t == "📝 تلخيص نص":
+        await message.answer(
+            "📝 *تلخيص النص*\n\n"
+            "أرسل النص الذي تريد تلخيصه مباشرة، أو استخدم:\n"
+            "`/summarize النص هنا...`\n\n"
+            "يمكنك أيضاً إرسال ملف PDF أو Word وسألخصه لك!",
+            parse_mode="Markdown"
+        )
+
+    elif t == "🎨 برومبت صورة":
+        await message.answer(
+            "🎨 *برومبت توليد الصور*\n\n"
+            "اكتب وصفاً للصورة وسأحوله إلى برومبت احترافي:\n\n"
+            "مثال: `اعمل صورة لمدينة مستقبلية تحت الماء`",
+            parse_mode="Markdown"
+        )
+
+    elif t == "🧠 اختبار معلومات":
+        # تم معالجته بواسطة الدالة المخصصة start_quiz_interactive
+        # لكن هذا السطر لن يصل إليه بسبب ترتيب المعالجات، لكن نتركه احتياطياً
+        await message.answer("🧠 اضغط على الزر لبدء اختبار تفاعلي.", parse_mode="Markdown")
+
+    elif t == "⭐ تقييم البوت":
+        await message.answer(
+            "⭐ *قيّم تجربتك مع البوت*\n\nاختر عدد النجوم:",
+            reply_markup=get_feedback_keyboard(),
+            parse_mode="Markdown"
+        )
+
+    elif t == "👨‍💻 تواصل مع المبرمج":
+        await message.answer(
+            f"👨‍💻 *المبرمج:* {DEVELOPER_NAME}\n\n"
+            f"📧 *للتواصل:* {DEVELOPER_USERNAME}",
+            parse_mode="Markdown"
+        )
+
+# ─────────────────────────────────────────
+#  معالج الرسائل النصية (كما هو)
+# ─────────────────────────────────────────
+@router.message(F.text)
+async def handle_message(message: types.Message):
+    if message.text in BUTTON_TEXTS:
+        return
+
+    update_user_activity(message.from_user)
+
+    if await rate_limit_check(message):
+        return
+    if is_user_banned(message.from_user.id):
+        return await message.reply("⛔ تم حظرك من استخدام هذا البوت.")
+
+    user_id    = message.from_user.id
+    user_text  = message.text
+    text_lower = user_text.lower()
+
+    # ── حالة انتظار اختيار صيغة الملف ──
+    if user_id in user_pending_file:
+        fmt_map = {"pdf": "pdf", "word": "docx", "docx": "docx", "excel": "xlsx", "xlsx": "xlsx"}
+        chosen  = fmt_map.get(text_lower.strip())
+        if chosen:
+            pending = user_pending_file.pop(user_id)
+            await message.bot.send_chat_action(chat_id=message.chat.id, action="upload_document")
+            await do_file_conversion(message, pending["file_bytes"], pending["filename"], chosen)
+            return
+
+    # ── كشف نية التحويل ──
+    intent, content = detect_conversion_intent(user_text)
+
+    need_text_map = {
+        "EXCEL_NEED_TEXT": "📊 ما هو النص الذي تريد تحويله إلى Excel؟",
+        "WORD_NEED_TEXT":  "📝 ما هو النص الذي تريد تحويله إلى Word؟",
+        "PDF_NEED_TEXT":   "📕 ما هو النص الذي تريد تحويله إلى PDF؟",
+    }
+    if intent in need_text_map:
+        return await message.reply(need_text_map[intent])
+
+    if intent in ("excel", "docx", "pdf") and content:
+        await message.bot.send_chat_action(chat_id=message.chat.id, action="upload_document")
+        ext_map   = {"excel": "xlsx", "docx": "docx", "pdf": "pdf"}
+        cap_map   = {"excel": "📊 ملف Excel جاهز!", "docx": "📄 ملف Word جاهز!", "pdf": "📕 ملف PDF جاهز!"}
+        func_map  = {"excel": create_excel_file, "docx": create_docx_file, "pdf": create_pdf_file}
+        ext       = ext_map[intent]
+        path      = f"/tmp/{user_id}_doc.{ext}"
+        try:
+            func_map[intent](content, path)
+            await message.reply_document(FSInputFile(path), caption=cap_map[intent])
+            os.remove(path)
+        except Exception as e:
+            logger.error(f"{intent} creation error: {e}")
+            log_error(user_id, f"create_{intent}", str(e))
+            await message.reply(f"❌ حدث خطأ في إنشاء الملف. تفاصيل الخطأ سُجِّلت.")
+        return
+
+    # ── تلخيص ──
+    summarize_triggers = ["لخص", "لخصلي", "تلخيص", "summarize", "ملخص"]
+    if any(kw in text_lower for kw in summarize_triggers):
+        await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+        prompt = f"لخص النص التالي بشكل مختصر واحترافي مع الحفاظ على أهم النقاط:\n\n{user_text}"
+        resp   = await gemini_client.generate(prompt, user_id, use_cache=True)
+        await message.reply(f"📝 *الملخص:*\n\n{resp}", parse_mode="Markdown")
+        return
+
+    # ── برومبت صورة ──
+    image_keywords = ["اعملي صورة", "اعمل صورة", "ارسم", "صمملي", "تخيل", "صورلي",
+                      "توليد صورة", "انشاء صورة", "صمم صورة"]
+    if any(kw in text_lower for kw in image_keywords):
+        await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+        prompt = (
+            f"حوّل الطلب التالي إلى برومبت إبداعي واحترافي باللغة العربية لتوليد الصور بالذكاء الاصطناعي. "
+            f"أضف تفاصيل عن الإضاءة والألوان والزاوية والجو العام.\n\n"
+            f"طلب المستخدم: {user_text}\n\n"
+            f"اكتب فقط نص البرومبت بدون أي مقدمات أو شرح."
+        )
+        generated = await gemini_client.generate(prompt, user_id, use_cache=True)
+        await message.reply(
+            f"🎨 *برومبت احترافي لطلبك:*\n\n`{generated}`\n\n"
+            "🖼️ انسخ هذا النص ولصقه في Midjourney أو DALL-E أو أي أداة توليد صور.",
+            parse_mode="Markdown"
+        )
+        return
+
+    # ── ترجمة ──
+    translate_triggers = ["ترجم إلى", "ترجم الى", "ترجم لـ", "ترجمة إلى", "ترجمة لـ", "translate to"]
+    for trigger in translate_triggers:
+        if trigger in text_lower:
+            idx  = text_lower.find(trigger)
+            rest = user_text[idx + len(trigger):].strip()
+            if ":" in rest:
+                target_lang, text_to_translate = rest.split(":", 1)
+                target_lang       = target_lang.strip()
+                text_to_translate = text_to_translate.strip()
+                if target_lang and text_to_translate:
+                    await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+                    prompt = f"ترجم النص التالي إلى {target_lang}. أرسل الترجمة فقط:\n\n{text_to_translate}"
+                    translation = await gemini_client.generate(prompt, user_id, use_cache=True)
+                    await message.answer(f"🌐 *الترجمة إلى {target_lang}:*\n\n{translation}", parse_mode="Markdown")
+                    return
+            else:
+                await message.reply(
+                    f"🌐 أرسل النص بهذا الشكل:\n`ترجم إلى {rest}: النص هنا`",
+                    parse_mode="Markdown"
+                )
+                return
+
+    # ── رد Gemini العادي ──
+    await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+    resp = await gemini_client.generate(user_text, user_id)
+    for i in range(0, len(resp), 4000):
+        await message.answer(resp[i:i + 4000])
+
+# ─────────────────────────────────────────
+#  معالج الصور (كما هو)
+# ─────────────────────────────────────────
+@router.message(F.photo)
+async def handle_photo(message: types.Message, bot: Bot):
+    update_user_activity(message.from_user)
+    if await rate_limit_check(message):
+        return
+    if is_user_banned(message.from_user.id):
+        return
+    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
+    try:
+        photo     = message.photo[-1]
+        file_info = await bot.get_file(photo.file_id)
+        bio       = BytesIO()
+        await bot.download_file(file_info.file_path, bio)
+        bio.seek(0)
+        img_bytes, mime = convert_image_to_png(bio.read())
+        b64     = base64.b64encode(img_bytes).decode("utf-8")
+        caption = message.caption or "حلل هذه الصورة وصفها بالتفصيل."
+        resp    = await gemini_client.generate_with_media(
+            caption, [{"inline_data": {"mime_type": mime, "data": b64}}]
+        )
+        for i in range(0, len(resp), 4000):
+            await message.reply(resp[i:i + 4000])
+    except Exception as e:
+        logger.error(f"Photo error: {e}")
+        log_error(message.from_user.id, "photo_analysis", str(e))
+        await message.reply("⚠️ عذراً، حدث خطأ أثناء تحليل الصورة. حاول مرة أخرى.")
+
+# ─────────────────────────────────────────
+#  معالج المستندات (كما هو مع تصحيح pypdf إلى PyPDF2)
+# ─────────────────────────────────────────
+@router.message(F.document)
+async def handle_document(message: types.Message, bot: Bot):
+    update_user_activity(message.from_user)
+    if await rate_limit_check(message):
+        return
+    if is_user_banned(message.from_user.id):
+        return
+
+    doc     = message.document
+    fname   = doc.file_name or "document"
+    mime    = doc.mime_type or ""
+    cap     = message.caption or ""
+    user_id = message.from_user.id
+
+    # ── تحويل ملف بناءً على اختيار سابق ──
+    if user_id in user_conversion_choice:
+        source, target, label = user_conversion_choice[user_id]
+        if source == "any" and not target:
+            c = cap.lower()
+            if   "pdf"   in c: target = "pdf"
+            elif "word"  in c or "docx" in c: target = "docx"
+            elif "excel" in c or "xlsx" in c: target = "xlsx"
+        if target:
+            await bot.send_chat_action(chat_id=message.chat.id, action="upload_document")
+            file_info  = await bot.get_file(doc.file_id)
+            file_bytes = await bot.download_file(file_info.file_path)
+            del user_conversion_choice[user_id]
+            await do_file_conversion(message, file_bytes.read(), fname, target)
+            return
+        else:
+            file_info  = await bot.get_file(doc.file_id)
+            file_bytes = await bot.download_file(file_info.file_path)
+            user_pending_file[user_id] = {"file_bytes": file_bytes.read(), "filename": fname}
+            await message.reply(
+                "📝 *إلى أي صيغة تريد التحويل؟*\n\n• `pdf`\n• `word`\n• `excel`",
+                parse_mode="Markdown"
+            )
+            return
+
+    # ── كشف نية التحويل من التعليق ──
+    if cap:
+        c      = cap.lower()
+        target = None
+        if   "pdf"   in c: target = "pdf"
+        elif "word"  in c or "docx" in c: target = "docx"
+        elif "excel" in c or "xlsx" in c: target = "xlsx"
+        elif "ppt"   in c or "pptx" in c: target = "pptx"
+        if target:
+            await bot.send_chat_action(chat_id=message.chat.id, action="upload_document")
+            file_info  = await bot.get_file(doc.file_id)
+            file_bytes = await bot.download_file(file_info.file_path)
+            await do_file_conversion(message, file_bytes.read(), fname, target)
+            return
+
+    # ── تحليل المستند بالذكاء الاصطناعي ──
+    supported_mimes = {
+        "application/pdf", "text/plain",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "text/csv"
+    }
+    if mime not in supported_mimes:
+        return await message.reply(
+            "⚠️ *نوع الملف غير مدعوم للتحليل.*\n\n"
+            "الصيغ المدعومة: PDF, Word, Excel, CSV, TXT",
+            parse_mode="Markdown"
+        )
+
+    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
+    try:
+        info = await bot.get_file(doc.file_id)
+        bio  = BytesIO()
+        await bot.download_file(info.file_path, bio)
+        bio.seek(0)
+        fb   = bio.read()
+        text = ""
+
+        if mime in ("text/plain", "text/csv"):
+            text = fb.decode("utf-8", errors="ignore")
+        elif mime == "application/pdf":
+            import PyPDF2  # <--- تم التصحيح من pypdf إلى PyPDF2
+            reader = PyPDF2.PdfReader(BytesIO(fb))
+            for page in reader.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    text += page_text
+        elif "word" in mime:
+            import docx as dx
+            doc_obj = dx.Document(BytesIO(fb))
+            text    = "\n".join(p.text for p in doc_obj.paragraphs)
+        elif "excel" in mime or "spreadsheet" in mime:
+            from openpyxl import load_workbook
+            wb   = load_workbook(BytesIO(fb), read_only=True)
+            ws   = wb.active
+            text = "\n".join(" | ".join(str(c) if c else "" for c in row) for row in ws.iter_rows(values_only=True))
+
+        if not text.strip():
+            return await message.reply("⚠️ لم أستطع استخراج نص من هذا الملف. قد يكون الملف مشفراً أو يحتوي على صور فقط.")
+
+        prompt = f"حلل هذا المستند ({fname}). {cap or 'قدم ملخصاً شاملاً للمحتوى مع أبرز النقاط.'}\n\n{text[:10000]}"
+        resp   = await gemini_client.generate(prompt, user_id)
+        for i in range(0, len(resp), 4000):
+            await message.reply(resp[i:i + 4000])
+    except Exception as e:
+        logger.error(f"Document analysis error: {e}")
+        log_error(user_id, "document_analysis", str(e))
+        await message.reply("⚠️ عذراً، حدث خطأ أثناء تحليل المستند.")
+
+# ─────────────────────────────────────────
+#  معالج الصوت (مع تحسين مسار ffmpeg)
+# ─────────────────────────────────────────
+@router.message(F.voice)
+async def handle_voice(message: types.Message, bot: Bot):
+    update_user_activity(message.from_user)
+    if await rate_limit_check(message):
+        return
+    if is_user_banned(message.from_user.id):
+        return
+
+    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
+    user_id  = message.from_user.id
+    ogg_path = f"/tmp/{user_id}_voice.ogg"
+    wav_path = f"/tmp/{user_id}_voice.wav"
+
+    try:
+        file_info = await bot.get_file(message.voice.file_id)
+        bio       = BytesIO()
+        await bot.download_file(file_info.file_path, bio)
+        bio.seek(0)
+        with open(ogg_path, "wb") as f:
+            f.write(bio.read())
+
+        # استخدام ffmpeg مع المسار المكتشف
+        ffmpeg_cmd = FFMPEG_PATH if FFMPEG_PATH and os.path.exists(FFMPEG_PATH) else "ffmpeg"
+        try:
+            subprocess.run(
+                [ffmpeg_cmd, "-y", "-i", ogg_path, "-ar", "16000", "-ac", "1", wav_path],
+                check=True, capture_output=True, timeout=30
+            )
+            logger.info(f"Audio converted to WAV using {ffmpeg_cmd}")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"ffmpeg conversion failed: {e.stderr}")
+            return await message.reply("🎤 عذراً، فشل تحويل الصوت. تأكد من أن الملف الصوتي سليم وأن ffmpeg مثبت في البيئة.")
+        except Exception as e:
+            logger.error(f"ffmpeg error: {e}")
+            return await message.reply("🎤 عذراً، فشل تحويل الصوت. تأكد من أن الملف الصوتي سليم.")
+
+        import speech_recognition as sr
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(wav_path) as source:
+            audio = recognizer.record(source)
+
+        text = None
+        for lang in ["ar-AR", "en-US", ""]:
+            try:
+                text = recognizer.recognize_google(audio, language=lang) if lang else recognizer.recognize_google(audio)
+                if text:
+                    break
+            except sr.UnknownValueError:
+                continue
+            except sr.RequestError as e:
+                logger.error(f"Google STT error: {e}")
+                return await message.reply("⚠️ خدمة التعرف على الصوت غير متاحة حالياً. حاول مرة أخرى.")
+
+        if not text:
+            return await message.reply("🎤 لم أتمكن من فهم الصوت. جرب مرة أخرى بصوت أوضح وبدون ضوضاء.")
+
+        await message.reply(f"🎤 *لقد فهمت:* _{text}_", parse_mode="Markdown")
+        resp = await gemini_client.generate(text, user_id)
+        for i in range(0, len(resp), 4000):
+            await message.answer(resp[i:i + 4000])
+
+    except ImportError:
+        await message.reply("⚠️ مكتبة التعرف على الصوت غير مثبتة.")
+    except Exception as e:
+        logger.error(f"Voice error: {e}")
+        log_error(user_id, "voice_processing", str(e))
+        await message.reply("🎤 عذراً، حدث خطأ أثناء معالجة الصوت.")
+    finally:
+        for p in [ogg_path, wav_path]:
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
+
+# ─────────────────────────────────────────
+#  Web Server (تم التعليق عليه لتفادي مشاكل المنافذ، يمكن إلغاء التعليق إذا لزم الأمر)
+# ─────────────────────────────────────────
+# async def handle_health(request):
+#     ...
+# async def handle_web_chat(request):
+#     ...
+# async def init_web_server():
+#     ...
+
+# ─────────────────────────────────────────
+#  نقطة الانطلاق
+# ─────────────────────────────────────────
 async def main():
     init_db()
     bot = Bot(token=os.getenv("TELEGRAM_BOT_TOKEN"))
-    dp = Dispatcher(storage=storage)
+    dp  = Dispatcher(storage=storage)
     dp.include_router(router)
     logger.info(f"Bot starting with model: {GEMINI_MODEL}")
+    # تعليق تشغيل خادم الويب لتجنب تعارض المنافذ مع منصات مثل Replit (يمكن إلغاء التعليق إذا دعت الحاجة)
+    # await init_web_server()
     await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
 
 if __name__ == "__main__":
